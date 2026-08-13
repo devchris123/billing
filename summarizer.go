@@ -80,15 +80,30 @@ func summarize(events []VMEvent, stats BillingStats) BillingSummary {
 	}
 
 	// Group by project and flavor, accumulate billed hours.
+	projectFlavorMap, unmatchedStops := groupByProjectAndFlavor(instanceGroups)
+	stats.UnmatchedStops = unmatchedStops
+
+	projects, total := createProjectSummaries(projectFlavorMap)
+
+	return BillingSummary{
+		Period:         BillingPeriod{Start: periodStart, End: periodEnd},
+		Projects:       projects,
+		TotalCostCents: total,
+		Counters:       stats,
+	}
+}
+
+func groupByProjectAndFlavor(instanceGroups map[string][]VMEvent) (map[string]map[string]uint, uint) {
 	var projectFlavorMap = make(map[string]map[string]uint) // project -> flavor -> billed hours
+	var unmatchedStops uint
 
 	for _, group := range instanceGroups {
 		sort.Slice(group, func(i, j int) bool {
 			return group[i].OccurredAt.Before(group[j].OccurredAt)
 		})
 
-		sessions, unmatchedStops := pairSessions(group, periodEnd)
-		stats.UnmatchedStops += unmatchedStops
+		sessions, us := pairSessions(group, periodEnd)
+		unmatchedStops += us
 
 		for _, session := range sessions {
 			if _, ok := projectFlavorMap[session.ProjectId]; !ok {
@@ -97,9 +112,13 @@ func summarize(events []VMEvent, stats BillingStats) BillingSummary {
 			projectFlavorMap[session.ProjectId][session.Flavor] += billedHours(session)
 		}
 	}
+	return projectFlavorMap, unmatchedStops
+}
 
+func createProjectSummaries(projectFlavorMap map[string]map[string]uint) (map[string]ProjectSummary, uint) {
 	projects := map[string]ProjectSummary{}
 	var total uint
+
 	for project, byFlavor := range projectFlavorMap {
 		var cost uint
 		for flavor, h := range byFlavor {
@@ -108,13 +127,7 @@ func summarize(events []VMEvent, stats BillingStats) BillingSummary {
 		projects[project] = ProjectSummary{BilledHours: byFlavor, CostCents: cost}
 		total += cost
 	}
-
-	return BillingSummary{
-		Period:         BillingPeriod{Start: periodStart, End: periodEnd},
-		Projects:       projects,
-		TotalCostCents: total,
-		Counters:       stats,
-	}
+	return projects, total
 }
 
 // pairSessions pairs the sorted events of a single instance into sessions and

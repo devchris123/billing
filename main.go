@@ -22,7 +22,7 @@ func main() {
 	defer file.Close()
 
 	events, stats := parse(file)
-	summary := summarize(events, stats)
+	summary := calculateBillingSummary(events, stats)
 
 	out, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {

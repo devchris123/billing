@@ -67,10 +67,10 @@ const (
 	Stop  EventType = "instance.stop"
 )
 
-// summarize turns deduplicated, validated events into the billing summary.
-// The caller passes in the counters collected while parsing; summarize adds
+// calculateBillingSummary turns deduplicated, validated events into the billing summary.
+// The caller passes in the counters collected while parsing; calculateBillingSummary adds
 // the unmatched stops it finds.
-func summarize(events []VMEvent, stats BillingStats) BillingSummary {
+func calculateBillingSummary(events []VMEvent, stats BillingStats) BillingSummary {
 	// Group by instance id: sessions belong to an instance, and each
 	// instance's timeline can be paired independently of the others.
 	var instanceGroups = make(map[string][]VMEvent)
@@ -83,11 +83,11 @@ func summarize(events []VMEvent, stats BillingStats) BillingSummary {
 	projectFlavorMap, unmatchedStops := groupByProjectAndFlavor(instanceGroups)
 	stats.UnmatchedStops = unmatchedStops
 
-	projects, total := createProjectSummaries(projectFlavorMap)
+	projectSummaries, total := createProjectSummaries(projectFlavorMap)
 
 	return BillingSummary{
 		Period:         BillingPeriod{Start: periodStart, End: periodEnd},
-		Projects:       projects,
+		Projects:       projectSummaries,
 		TotalCostCents: total,
 		Counters:       stats,
 	}
@@ -98,42 +98,31 @@ func groupByProjectAndFlavor(instanceGroups map[string][]VMEvent) (map[string]ma
 	var unmatchedStops uint
 
 	for _, group := range instanceGroups {
-		sort.Slice(group, func(i, j int) bool {
-			return group[i].OccurredAt.Before(group[j].OccurredAt)
-		})
-
-		sessions, us := pairSessions(group, periodEnd)
+		sessions, us := pairSessions(group)
 		unmatchedStops += us
 
 		for _, session := range sessions {
 			if _, ok := projectFlavorMap[session.ProjectId]; !ok {
 				projectFlavorMap[session.ProjectId] = make(map[string]uint)
 			}
-			projectFlavorMap[session.ProjectId][session.Flavor] += billedHours(session)
+			projectFlavorMap[session.ProjectId][session.Flavor] += calculateBilledHoursFor(session)
 		}
 	}
 	return projectFlavorMap, unmatchedStops
 }
 
-func createProjectSummaries(projectFlavorMap map[string]map[string]uint) (map[string]ProjectSummary, uint) {
-	projects := map[string]ProjectSummary{}
-	var total uint
+func pairSessions(group []VMEvent) ([]Session, uint) {
+	sort.Slice(group, func(i, j int) bool {
+		return group[i].OccurredAt.Before(group[j].OccurredAt)
+	})
 
-	for project, byFlavor := range projectFlavorMap {
-		var cost uint
-		for flavor, h := range byFlavor {
-			cost += calculateCost(flavor, h)
-		}
-		projects[project] = ProjectSummary{BilledHours: byFlavor, CostCents: cost}
-		total += cost
-	}
-	return projects, total
+	return doPairSessions(group, periodEnd)
 }
 
-// pairSessions pairs the sorted events of a single instance into sessions and
+// doPairSessions pairs the sorted events of a single instance into sessions and
 // counts stops that have no matching start. A start still open at the end of
 // the events is billed until periodEnd.
-func pairSessions(events []VMEvent, periodEnd time.Time) ([]Session, uint) {
+func doPairSessions(events []VMEvent, periodEnd time.Time) ([]Session, uint) {
 	var sessions []Session
 	var openStart *VMEvent
 	var unmatchedStops uint
@@ -175,9 +164,24 @@ func pairSessions(events []VMEvent, periodEnd time.Time) ([]Session, uint) {
 	return sessions, unmatchedStops
 }
 
-// billedHours returns the started hours of a session: a 25-minute session is
+func createProjectSummaries(projectFlavorMap map[string]map[string]uint) (map[string]ProjectSummary, uint) {
+	projects := map[string]ProjectSummary{}
+	var total uint
+
+	for project, byFlavor := range projectFlavorMap {
+		var cost uint
+		for flavor, h := range byFlavor {
+			cost += calculateCostFor(flavor, h)
+		}
+		projects[project] = ProjectSummary{BilledHours: byFlavor, CostCents: cost}
+		total += cost
+	}
+	return projects, total
+}
+
+// calculateBilledHoursFor returns the started hours of a session: a 25-minute session is
 // 1 hour, 2.5 hours are 3 hours, an exact 2 hours stay 2.
-func billedHours(session Session) uint {
+func calculateBilledHoursFor(session Session) uint {
 	duration := session.End.Sub(session.Start)
 	if duration <= 0 {
 		return 0
@@ -186,8 +190,8 @@ func billedHours(session Session) uint {
 	return uint((duration + time.Hour - 1) / time.Hour)
 }
 
-// calculateCost prices billed hours of a flavor. An unknown flavor costs
+// calculateCostFor prices billed hours of a flavor. An unknown flavor costs
 // nothing; parse rejects those before they get here.
-func calculateCost(flavor string, hours uint) uint {
+func calculateCostFor(flavor string, hours uint) uint {
 	return flavorRates[flavor] * hours
 }

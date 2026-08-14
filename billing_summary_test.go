@@ -19,7 +19,7 @@ func TestPairSessions(t *testing.T) {
 			{EventId: "3", OccurredAt: at(14), ProjectId: "proj1", InstanceId: "inst1", Type: Start, Flavor: "s1.medium"},
 			{EventId: "4", OccurredAt: at(16), ProjectId: "proj1", InstanceId: "inst1", Type: Stop, Flavor: "s1.medium"},
 		}
-		sessions, unmatchedStops := pairSessions(events, periodEnd)
+		sessions, unmatchedStops := doPairSessions(events, periodEnd)
 		if len(sessions) != 2 {
 			t.Errorf("Expected 2 sessions, got %d", len(sessions))
 		}
@@ -34,7 +34,7 @@ func TestPairSessions(t *testing.T) {
 			{EventId: "2", OccurredAt: at(12), ProjectId: "proj1", InstanceId: "inst1", Type: Stop, Flavor: "s1.medium"},
 			{EventId: "3", OccurredAt: at(14), ProjectId: "proj1", InstanceId: "inst1", Type: Stop, Flavor: "s1.medium"},
 		}
-		sessions, unmatchedStops := pairSessions(events, periodEnd)
+		sessions, unmatchedStops := doPairSessions(events, periodEnd)
 		if len(sessions) != 1 {
 			t.Errorf("Expected 1 session, got %d", len(sessions))
 		}
@@ -47,7 +47,7 @@ func TestPairSessions(t *testing.T) {
 		events := []VMEvent{
 			{EventId: "1", OccurredAt: at(10), ProjectId: "proj1", InstanceId: "inst1", Type: Start, Flavor: "s1.medium"},
 		}
-		sessions, unmatchedStops := pairSessions(events, periodEnd)
+		sessions, unmatchedStops := doPairSessions(events, periodEnd)
 		if len(sessions) != 1 {
 			t.Fatalf("Expected 1 session, got %d", len(sessions))
 		}
@@ -65,7 +65,7 @@ func TestPairSessions(t *testing.T) {
 			{EventId: "2", OccurredAt: at(11), ProjectId: "proj1", InstanceId: "inst1", Type: Start, Flavor: "s1.medium"},
 			{EventId: "3", OccurredAt: at(12), ProjectId: "proj1", InstanceId: "inst1", Type: Stop, Flavor: "s1.medium"},
 		}
-		sessions, _ := pairSessions(events, periodEnd)
+		sessions, _ := doPairSessions(events, periodEnd)
 		if len(sessions) != 1 {
 			t.Fatalf("Expected 1 session, got %d", len(sessions))
 		}
@@ -93,7 +93,7 @@ func TestBilledHours(t *testing.T) {
 	}
 	for _, c := range cases {
 		s := Session{Start: base, End: base.Add(c.d)}
-		if got := billedHours(s); got != c.want {
+		if got := calculateBilledHoursFor(s); got != c.want {
 			t.Errorf("d=%v: got %d want %d", c.d, got, c.want)
 		}
 	}
@@ -112,7 +112,7 @@ func TestCalculateCost(t *testing.T) {
 		{"unknown", 5, 0},
 	}
 	for _, c := range cases {
-		if got := calculateCost(c.flavor, c.hours); got != c.want {
+		if got := calculateCostFor(c.flavor, c.hours); got != c.want {
 			t.Errorf("flavor=%s hours=%d: got %d want %d", c.flavor, c.hours, got, c.want)
 		}
 	}
@@ -133,7 +133,7 @@ func TestSummarize(t *testing.T) {
 		{EventId: "1", OccurredAt: at(10), ProjectId: "p-a", InstanceId: "inst1", Type: Start, Flavor: "s1.medium"},
 	}
 
-	summary := summarize(events, BillingStats{InvalidLines: 2, DuplicateEvents: 1})
+	summary := calculateBillingSummary(events, BillingStats{InvalidLines: 2, DuplicateEvents: 1})
 
 	if got := summary.Projects["p-a"].BilledHours["s1.medium"]; got != 3 {
 		t.Errorf("Expected 3 billed hours for p-a, got %d", got)

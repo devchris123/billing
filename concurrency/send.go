@@ -1,8 +1,8 @@
-package event_client
+package concurrency
 
 import "context"
 
-func send[T any](ctx context.Context, to chan T, value T) bool {
+func Send[T any](ctx context.Context, to chan T, value T) bool {
 	select {
 	case to <- value:
 		return true

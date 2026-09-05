@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	event "github.com/ghaering/core-api-task/event_ingestion"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,10 +39,10 @@ func TestEventClientListen(t *testing.T) {
 		errChan:      errChan,
 	})
 
-	event1 := VmEvent{Event_id: "id1"}
+	event1 := event.VmEvent{Event_id: "id1"}
 	event1Json, err := json.Marshal(event1)
 	require.NoError(t, err)
-	event2 := VmEvent{Event_id: "id2"}
+	event2 := event.VmEvent{Event_id: "id2"}
 	event2Json, err := json.Marshal(event2)
 	require.NoError(t, err)
 

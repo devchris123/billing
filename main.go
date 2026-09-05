@@ -1,33 +1,36 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
+	"context"
+	"log/slog"
+
+	ec "github.com/ghaering/core-api-task/event_client"
+	edb "github.com/ghaering/core-api-task/event_db"
+	ing "github.com/ghaering/core-api-task/event_ingestion"
+	"github.com/ghaering/core-api-task/session"
 )
 
 const defaultEventsFile = "events.jsonl"
 
 func main() {
-	path := defaultEventsFile
-	if len(os.Args) > 1 {
-		path = os.Args[1]
-	}
-
-	file, err := os.Open(path)
+	// Streaming setup
+	ctx := context.Background()
+	kc, err := ec.NewKafkaClient(
+		[]string{},
+		"",
+		"",
+	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "cannot read events:", err)
-		os.Exit(1)
+		slog.ErrorContext(ctx, "create kafka client", slog.Any("error", err))
+		return
 	}
-	defer file.Close()
-
-	events, stats := parse(file)
-	summary := calculateBillingSummary(events, stats)
-
-	out, err := json.MarshalIndent(summary, "", "  ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "cannot write summary:", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(out))
+	ec := ec.NewEventClient(kc)
+	edb := edb.NewEventDB()
+	sessionizer := session.NewSessionizer(ing.NewIngestor(
+		ec,
+		edb,
+		ing.IngestionConfig{MaxOutOfOrderness: 0},
+		slog.Default(),
+	))
+	slog.InfoContext(ctx, "built sessionizer", slog.Any("sessionizer", sessionizer))
 }

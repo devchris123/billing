@@ -1,4 +1,4 @@
-package event_client
+package concurrency
 
 import (
 	"context"
@@ -15,7 +15,7 @@ func TestSendSendsValue(t *testing.T) {
 	value := "hello chan"
 
 	// Execute
-	sent := send(ctx, myChan, value)
+	sent := Send(ctx, myChan, value)
 
 	// Assert
 	require.True(t, sent)
@@ -31,7 +31,7 @@ func TestSendCancels(t *testing.T) {
 
 	// Execute
 	go func() {
-		result <- send(ctx, myChan, value)
+		result <- Send(ctx, myChan, value)
 	}()
 
 	cancel()

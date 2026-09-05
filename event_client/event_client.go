@@ -3,7 +3,9 @@ package event_client
 import (
 	"context"
 	"encoding/json"
-	"time"
+
+	conc "github.com/ghaering/core-api-task/concurrency"
+	event "github.com/ghaering/core-api-task/event_ingestion"
 )
 
 type Client interface {
@@ -16,21 +18,16 @@ type EventClient struct {
 	kc Client
 }
 
-type VmEvent struct {
-	Event_id    string
-	Flavour     string
-	Instance_id string
-	Occurred_at time.Time
-	Project_id  string
-	Event_type  string
-}
-
 func NewEventClient(kc Client) *EventClient {
 	return &EventClient{kc}
 }
 
-func (ec *EventClient) Listen(ctx context.Context) (<-chan VmEvent, <-chan error) {
-	vmListenChan := make(chan VmEvent)
+func (ec *EventClient) Close(ctx context.Context) {
+	ec.kc.close()
+}
+
+func (ec *EventClient) Listen(ctx context.Context) (<-chan event.VmEvent, <-chan error) {
+	vmListenChan := make(chan event.VmEvent)
 	vmErrChan := make(chan error)
 
 	listenChan, errChan := ec.kc.listen(ctx)
@@ -47,14 +44,14 @@ func (ec *EventClient) Listen(ctx context.Context) (<-chan VmEvent, <-chan error
 				if !ok {
 					return
 				}
-				vmEvent := &VmEvent{}
+				vmEvent := &event.VmEvent{}
 				err := json.Unmarshal(value, vmEvent)
 				if err != nil {
-					if !send(ctx, vmErrChan, err) {
+					if !conc.Send(ctx, vmErrChan, err) {
 						return
 					}
 				} else {
-					if !send(ctx, vmListenChan, *vmEvent) {
+					if !conc.Send(ctx, vmListenChan, *vmEvent) {
 						return
 					}
 				}
@@ -62,7 +59,7 @@ func (ec *EventClient) Listen(ctx context.Context) (<-chan VmEvent, <-chan error
 				if !ok {
 					return
 				}
-				if !send(ctx, vmErrChan, err) {
+				if !conc.Send(ctx, vmErrChan, err) {
 					return
 				}
 			}
@@ -72,7 +69,7 @@ func (ec *EventClient) Listen(ctx context.Context) (<-chan VmEvent, <-chan error
 	return vmListenChan, vmErrChan
 }
 
-func (ec *EventClient) Send(ctx context.Context, vmEvent VmEvent) (chan error, error) {
+func (ec *EventClient) Send(ctx context.Context, vmEvent event.VmEvent) (chan error, error) {
 	bytes, err := json.Marshal(vmEvent)
 	if err != nil {
 		return nil, err

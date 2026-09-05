@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ghaering/core-api-task/event_client"
+	event "github.com/ghaering/core-api-task/event_ingestion"
+
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
@@ -54,8 +56,8 @@ func TestKafkaClient(t *testing.T) {
 	ec := event_client.NewEventClient(kc)
 
 	// Setup some messages
-	event1 := event_client.VmEvent{Event_id: "id1"}
-	event2 := event_client.VmEvent{Event_id: "id2"}
+	event1 := event.VmEvent{Event_id: "id1"}
+	event2 := event.VmEvent{Event_id: "id2"}
 
 	sendErrChan, err := ec.Send(ctx, event1)
 	require.NoError(t, err)

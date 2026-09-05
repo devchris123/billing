@@ -10,8 +10,6 @@ import (
 	"github.com/ghaering/core-api-task/session"
 )
 
-const defaultEventsFile = "events.jsonl"
-
 func main() {
 	// Streaming setup
 	ctx := context.Background()

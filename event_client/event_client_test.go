@@ -16,9 +16,7 @@ type FakeClient struct {
 	errChan      <-chan error
 }
 
-func (kc FakeClient) close() {
-	return
-}
+func (kc FakeClient) close() {}
 
 func (fc FakeClient) listen(ctx context.Context) (<-chan []byte, <-chan error) {
 	return fc.listenerChan, fc.errChan

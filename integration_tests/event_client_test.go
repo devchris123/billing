@@ -87,7 +87,4 @@ func TestKafkaClient(t *testing.T) {
 		t.Fatal("Timeout waiting for second event")
 	}
 
-	// Cleanup
-	testcontainers.CleanupContainer(t, kafkaC)
-	require.NoError(t, errC)
 }

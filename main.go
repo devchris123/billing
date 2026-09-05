@@ -23,7 +23,11 @@ func main() {
 		return
 	}
 	ec := ec.NewEventClient(kc)
-	edb := edb.NewEventDB()
+	edb, err := edb.NewEventDB("")
+	if err != nil {
+		slog.ErrorContext(ctx, "create event db", slog.Any("error", err))
+		return
+	}
 	sessionizer := session.NewSessionizer(ing.NewIngestor(
 		ec,
 		edb,

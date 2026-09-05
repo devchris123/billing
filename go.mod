@@ -3,6 +3,7 @@ module github.com/ghaering/core-api-task
 go 1.25.4
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.12.1
 	github.com/twmb/franz-go v1.21.6
 )
@@ -34,7 +35,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect

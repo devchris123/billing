@@ -5,9 +5,9 @@ import (
 	"log/slog"
 
 	ec "github.com/ghaering/core-api-task/event_client"
-	edb "github.com/ghaering/core-api-task/event_db"
 	ing "github.com/ghaering/core-api-task/event_ingestion"
 	"github.com/ghaering/core-api-task/session"
+	"github.com/ghaering/core-api-task/store"
 )
 
 func main() {
@@ -23,16 +23,35 @@ func main() {
 		return
 	}
 	ec := ec.NewEventClient(kc)
-	edb, err := edb.NewEventDB("")
+	eventDB, err := store.NewEventDB("")
 	if err != nil {
 		slog.ErrorContext(ctx, "create event db", slog.Any("error", err))
 		return
 	}
+	sessionDB, err := store.NewSessionDB("")
+	if err != nil {
+		slog.ErrorContext(ctx, "create session db", slog.Any("error", err))
+		return
+	}
+	checkpointDB, err := store.NewCheckpointDB("")
+	if err != nil {
+		slog.ErrorContext(ctx, "create checkpoint db", slog.Any("error", err))
+		return
+	}
 	sessionizer := session.NewSessionizer(ing.NewIngestor(
 		ec,
-		edb,
+		eventDB,
 		ing.IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),
-	))
+	),
+		eventDB,
+		sessionDB,
+		checkpointDB,
+		slog.Default(),
+	)
 	slog.InfoContext(ctx, "built sessionizer", slog.Any("sessionizer", sessionizer))
+	if err := sessionizer.Run(ctx); err != nil {
+		slog.ErrorContext(ctx, "run sessionizer", slog.Any("error", err))
+		return
+	}
 }

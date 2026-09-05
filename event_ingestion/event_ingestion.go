@@ -7,12 +7,12 @@ import (
 )
 
 type VmEvent struct {
-	EventId     string
-	Flavour     string
-	InstanceId  string
-	Occurred_at time.Time
-	ProjectId   string
-	EventType   string
+	EventId    string
+	Flavour    string
+	InstanceId string
+	OccurredAt time.Time
+	ProjectId  string
+	EventType  string
 }
 
 type EventClient interface {
@@ -20,7 +20,7 @@ type EventClient interface {
 	Listen(ctx context.Context) (<-chan VmEvent, <-chan error)
 }
 
-type EventIngestionDb interface {
+type EventAppender interface {
 	Append(ctx context.Context, vmEvent VmEvent) error
 }
 
@@ -29,8 +29,8 @@ type IngestionConfig struct {
 }
 
 type Ingestor struct {
-	ec              EventClient
-	edb             EventIngestionDb
+	eventClient     EventClient
+	eventAppender   EventAppender
 	ingestionConfig IngestionConfig
 	logger          *slog.Logger
 }
@@ -41,14 +41,14 @@ type IngestionResult struct {
 }
 
 func NewIngestor(
-	ec EventClient,
-	edb EventIngestionDb,
+	eventClient EventClient,
+	eventAppender EventAppender,
 	ingestionConfig IngestionConfig,
 	logger *slog.Logger,
 ) *Ingestor {
 	return &Ingestor{
-		ec:              ec,
-		edb:             edb,
+		eventClient:     eventClient,
+		eventAppender:   eventAppender,
 		ingestionConfig: ingestionConfig,
 		logger:          logger,
 	}
@@ -57,7 +57,7 @@ func NewIngestor(
 func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 	resultChan := make(chan IngestionResult)
 
-	vmEventChan, errChan := ing.ec.Listen(ctx)
+	vmEventChan, errChan := ing.eventClient.Listen(ctx)
 
 	go func() {
 		defer close(resultChan)
@@ -84,7 +84,7 @@ func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 					ctx, "Ingest event",
 					slog.Any("event", vmEvent),
 				)
-				if err := ing.edb.Append(ctx, vmEvent); err != nil {
+				if err := ing.eventAppender.Append(ctx, vmEvent); err != nil {
 					ing.logger.ErrorContext(
 						ctx, "Ingest append error",
 						slog.Any("error", err),
@@ -93,8 +93,8 @@ func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 				}
 
 				var watermark *time.Time
-				if vmEvent.Occurred_at.After(lastSeenEventTimestamp) {
-					lastSeenEventTimestamp = vmEvent.Occurred_at
+				if vmEvent.OccurredAt.After(lastSeenEventTimestamp) {
+					lastSeenEventTimestamp = vmEvent.OccurredAt
 					nextWatermark := lastSeenEventTimestamp.Add(
 						-ing.ingestionConfig.MaxOutOfOrderness,
 					)

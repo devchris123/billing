@@ -7,12 +7,12 @@ import (
 )
 
 type VmEvent struct {
-	Event_id    string
+	EventId     string
 	Flavour     string
-	Instance_id string
+	InstanceId  string
 	Occurred_at time.Time
-	Project_id  string
-	Event_type  string
+	ProjectId   string
+	EventType   string
 }
 
 type EventClient interface {

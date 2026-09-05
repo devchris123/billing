@@ -37,10 +37,10 @@ func TestEventClientListen(t *testing.T) {
 		errChan:      errChan,
 	})
 
-	event1 := event.VmEvent{Event_id: "id1"}
+	event1 := event.VmEvent{EventId: "id1"}
 	event1Json, err := json.Marshal(event1)
 	require.NoError(t, err)
-	event2 := event.VmEvent{Event_id: "id2"}
+	event2 := event.VmEvent{EventId: "id2"}
 	event2Json, err := json.Marshal(event2)
 	require.NoError(t, err)
 
@@ -53,7 +53,7 @@ func TestEventClientListen(t *testing.T) {
 	// Assert
 	select {
 	case value := <-eventChan:
-		require.Equal(t, event1.Event_id, value.Event_id)
+		require.Equal(t, event1.EventId, value.EventId)
 	case err := <-errEventChan:
 		require.NoError(t, err)
 	case <-time.After(1 * time.Second):
@@ -62,7 +62,7 @@ func TestEventClientListen(t *testing.T) {
 
 	select {
 	case value := <-eventChan:
-		require.Equal(t, event2.Event_id, value.Event_id)
+		require.Equal(t, event2.EventId, value.EventId)
 	case err := <-errEventChan:
 		require.NoError(t, err)
 	case <-time.After(1 * time.Second):

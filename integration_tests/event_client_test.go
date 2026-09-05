@@ -56,8 +56,8 @@ func TestKafkaClient(t *testing.T) {
 	ec := event_client.NewEventClient(kc)
 
 	// Setup some messages
-	event1 := event.VmEvent{Event_id: "id1"}
-	event2 := event.VmEvent{Event_id: "id2"}
+	event1 := event.VmEvent{EventId: "id1"}
+	event2 := event.VmEvent{EventId: "id2"}
 
 	sendErrChan, err := ec.Send(ctx, event1)
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestKafkaClient(t *testing.T) {
 
 	select {
 	case event := <-eventChan:
-		require.Equal(t, event1.Event_id, event.Event_id)
+		require.Equal(t, event1.EventId, event.EventId)
 	case err := <-errChan:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
@@ -80,7 +80,7 @@ func TestKafkaClient(t *testing.T) {
 
 	select {
 	case event := <-eventChan:
-		require.Equal(t, event2.Event_id, event.Event_id)
+		require.Equal(t, event2.EventId, event.EventId)
 	case err := <-errChan:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):

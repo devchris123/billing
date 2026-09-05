@@ -41,10 +41,10 @@ func TestWatermarkAdvances(t *testing.T) {
 	resultChan := ing.Ingest(ctx)
 
 	event1Time := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
-	event1 := VmEvent{Event_id: "id1", Occurred_at: event1Time}
+	event1 := VmEvent{EventId: "id1", Occurred_at: event1Time}
 	event2Time := event1Time.Add(time.Minute)
-	event2 := VmEvent{Event_id: "id2", Occurred_at: event2Time}
-	event3 := VmEvent{Event_id: "id3", Occurred_at: event2Time.Add(-5 * time.Minute)}
+	event2 := VmEvent{EventId: "id2", Occurred_at: event2Time}
+	event3 := VmEvent{EventId: "id3", Occurred_at: event2Time.Add(-5 * time.Minute)}
 
 	vmEventChan <- event1
 	vmEventChan <- event2
@@ -55,7 +55,7 @@ func TestWatermarkAdvances(t *testing.T) {
 	case result := <-resultChan:
 		require.NotNil(t, result.Watermark)
 		require.Equal(t, event1.Occurred_at, *result.Watermark)
-		require.Equal(t, event1.Event_id, result.Event.Event_id)
+		require.Equal(t, event1.EventId, result.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
@@ -64,7 +64,7 @@ func TestWatermarkAdvances(t *testing.T) {
 	case result := <-resultChan:
 		require.NotNil(t, result.Watermark)
 		require.Equal(t, event2.Occurred_at, *result.Watermark)
-		require.Equal(t, event2.Event_id, result.Event.Event_id)
+		require.Equal(t, event2.EventId, result.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
@@ -72,7 +72,7 @@ func TestWatermarkAdvances(t *testing.T) {
 	select {
 	case result := <-resultChan:
 		require.Nil(t, result.Watermark)
-		require.Equal(t, event3.Event_id, result.Event.Event_id)
+		require.Equal(t, event3.EventId, result.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
@@ -80,9 +80,9 @@ func TestWatermarkAdvances(t *testing.T) {
 	for _, expected := range []VmEvent{event1, event2, event3} {
 		select {
 		case actual := <-appended:
-			require.Equal(t, expected.Event_id, actual.Event_id)
+			require.Equal(t, expected.EventId, actual.EventId)
 		case <-time.After(time.Second):
-			t.Fatalf("event %s was not appended", expected.Event_id)
+			t.Fatalf("event %s was not appended", expected.EventId)
 		}
 	}
 }
@@ -104,14 +104,14 @@ func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
 	close(errChan)
 
 	event := VmEvent{
-		Event_id:    "id1",
+		EventId:     "id1",
 		Occurred_at: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
 	}
 	vmEventChan <- event
 
 	select {
 	case result := <-resultChan:
-		require.Equal(t, event.Event_id, result.Event.Event_id)
+		require.Equal(t, event.EventId, result.Event.EventId)
 		require.NotNil(t, result.Watermark)
 	case <-time.After(time.Second):
 		t.Fatal("event was not processed after error channel closed")
@@ -119,7 +119,7 @@ func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
 
 	select {
 	case actual := <-appended:
-		require.Equal(t, event.Event_id, actual.Event_id)
+		require.Equal(t, event.EventId, actual.EventId)
 	case <-time.After(time.Second):
 		t.Fatal("event was not appended after error channel closed")
 	}

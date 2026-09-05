@@ -41,10 +41,10 @@ func TestWatermarkAdvances(t *testing.T) {
 	resultChan := ing.Ingest(ctx)
 
 	event1Time := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
-	event1 := VmEvent{EventId: "id1", Occurred_at: event1Time}
+	event1 := VmEvent{EventId: "id1", OccurredAt: event1Time}
 	event2Time := event1Time.Add(time.Minute)
-	event2 := VmEvent{EventId: "id2", Occurred_at: event2Time}
-	event3 := VmEvent{EventId: "id3", Occurred_at: event2Time.Add(-5 * time.Minute)}
+	event2 := VmEvent{EventId: "id2", OccurredAt: event2Time}
+	event3 := VmEvent{EventId: "id3", OccurredAt: event2Time.Add(-5 * time.Minute)}
 
 	vmEventChan <- event1
 	vmEventChan <- event2
@@ -54,7 +54,7 @@ func TestWatermarkAdvances(t *testing.T) {
 	select {
 	case result := <-resultChan:
 		require.NotNil(t, result.Watermark)
-		require.Equal(t, event1.Occurred_at, *result.Watermark)
+		require.Equal(t, event1.OccurredAt, *result.Watermark)
 		require.Equal(t, event1.EventId, result.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
@@ -63,7 +63,7 @@ func TestWatermarkAdvances(t *testing.T) {
 	select {
 	case result := <-resultChan:
 		require.NotNil(t, result.Watermark)
-		require.Equal(t, event2.Occurred_at, *result.Watermark)
+		require.Equal(t, event2.OccurredAt, *result.Watermark)
 		require.Equal(t, event2.EventId, result.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
@@ -104,8 +104,8 @@ func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
 	close(errChan)
 
 	event := VmEvent{
-		EventId:     "id1",
-		Occurred_at: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+		EventId:    "id1",
+		OccurredAt: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
 	}
 	vmEventChan <- event
 

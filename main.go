@@ -23,30 +23,25 @@ func main() {
 		return
 	}
 	ec := ec.NewEventClient(kc)
-	eventDB, err := store.NewEventDB("")
+	db, err := store.Open("")
 	if err != nil {
-		slog.ErrorContext(ctx, "create event db", slog.Any("error", err))
+		slog.ErrorContext(ctx, "open database", slog.Any("error", err))
 		return
 	}
-	sessionDB, err := store.NewSessionDB("")
-	if err != nil {
-		slog.ErrorContext(ctx, "create session db", slog.Any("error", err))
-		return
-	}
-	checkpointDB, err := store.NewCheckpointDB("")
-	if err != nil {
-		slog.ErrorContext(ctx, "create checkpoint db", slog.Any("error", err))
-		return
-	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.ErrorContext(ctx, "close database", slog.Any("error", err))
+		}
+	}()
+	eventDB := store.NewEventDB(db)
+	transactor := store.NewPostgresTransactor(db)
 	sessionizer := session.NewSessionizer(ing.NewIngestor(
 		ec,
 		eventDB,
 		ing.IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),
 	),
-		eventDB,
-		sessionDB,
-		checkpointDB,
+		transactor,
 		slog.Default(),
 	)
 	slog.InfoContext(ctx, "built sessionizer", slog.Any("sessionizer", sessionizer))

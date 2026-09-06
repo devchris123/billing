@@ -4,6 +4,7 @@ package integration_tests
 
 import (
 	"context"
+	"errors"
 	"log"
 	"path/filepath"
 	"testing"
@@ -44,12 +45,75 @@ func TestPostgresStores(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	eventStore, err := store.NewEventDB(connectionString)
+	db, err := store.Open(connectionString)
 	require.NoError(t, err)
-	sessionStore, err := store.NewSessionDB(connectionString)
-	require.NoError(t, err)
-	checkpointStore, err := store.NewCheckpointDB(connectionString)
-	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+	})
+	eventStore := store.NewEventDB(db)
+	sessionStore := store.NewSessionDB(db)
+	checkpointStore := store.NewCheckpointDB(db)
+	transactor := store.NewPostgresTransactor(db)
+
+	t.Run("transactor commits work", func(t *testing.T) {
+		// Setup
+		start := session.SessionStart{
+			StartEventID: "committed-start",
+			InstanceID:   "committed-instance",
+			StartedAt:    time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC),
+		}
+
+		// Execute
+		err := transactor.Run(ctx, func(stores session.TxStores) error {
+			return stores.SessionStore.CreateSessionStart(ctx, start)
+		})
+
+		// Assert
+		require.NoError(t, err)
+		actual, err := sessionStore.ReadSessionStart(
+			ctx,
+			start.InstanceID,
+			start.StartedAt.Add(time.Hour),
+		)
+		require.NoError(t, err)
+		require.Equal(t, start.StartEventID, actual.StartEventID)
+	})
+
+	t.Run("transactor rolls back all stores", func(t *testing.T) {
+		// Setup
+		expectedErr := errors.New("work failed")
+		start := session.SessionStart{
+			StartEventID: "rolled-back-start",
+			InstanceID:   "rolled-back-instance",
+			StartedAt:    time.Date(2025, 1, 1, 9, 0, 0, 0, time.UTC),
+		}
+		checkpoint := session.WatermarkCheckpoint{
+			ProcessorName:    "rolled-back-processor",
+			ProcessedThrough: start.StartedAt,
+		}
+
+		// Execute
+		err := transactor.Run(ctx, func(stores session.TxStores) error {
+			if err := stores.SessionStore.CreateSessionStart(ctx, start); err != nil {
+				return err
+			}
+			if err := stores.CheckpointStore.UpdateWatermarkCheckpoint(ctx, checkpoint); err != nil {
+				return err
+			}
+			return expectedErr
+		})
+
+		// Assert
+		require.ErrorIs(t, err, expectedErr)
+		_, err = sessionStore.ReadSessionStart(
+			ctx,
+			start.InstanceID,
+			start.StartedAt.Add(time.Hour),
+		)
+		require.ErrorIs(t, err, session.ErrNotFound)
+		_, err = checkpointStore.ReadWatermarkCheckpoint(ctx, checkpoint.ProcessorName)
+		require.ErrorIs(t, err, session.ErrNotFound)
+	})
 
 	t.Run("event range excludes previous checkpoint", func(t *testing.T) {
 		// Setup

@@ -66,44 +66,48 @@ type CheckpointStore interface {
 }
 
 type Sessionizer struct {
-	ingestor        *ing.Ingestor
-	eventReader     EventReader
-	sessionStore    SessionStore
-	checkpointStore CheckpointStore
-	logger          *slog.Logger
-	newSessionID    func() (uuid.UUID, error)
+	ingestor     *ing.Ingestor
+	transactor   Transactor
+	logger       *slog.Logger
+	newSessionID func() (uuid.UUID, error)
 }
 
 func NewSessionizer(
 	ingestor *ing.Ingestor,
-	eventReader EventReader,
-	sessionStore SessionStore,
-	checkpointStore CheckpointStore,
+	transactor Transactor,
 	logger *slog.Logger,
 ) *Sessionizer {
 	return &Sessionizer{
-		ingestor:        ingestor,
-		eventReader:     eventReader,
-		sessionStore:    sessionStore,
-		checkpointStore: checkpointStore,
-		logger:          logger,
-		newSessionID:    uuid.NewV7,
+		ingestor:     ingestor,
+		transactor:   transactor,
+		logger:       logger,
+		newSessionID: uuid.NewV7,
 	}
 }
 
 func (sess *Sessionizer) loadCheckpoint(ctx context.Context) (WatermarkCheckpoint, error) {
-	processedThrough, err := sess.checkpointStore.ReadWatermarkCheckpoint(
-		ctx,
-		sessionizerProcessorName,
-	)
-	if errors.Is(err, ErrNotFound) {
-		processedThrough = WatermarkCheckpoint{
-			ProcessorName: sessionizerProcessorName,
+	var processedThrough WatermarkCheckpoint
+	err := sess.transactor.Run(ctx, func(stores TxStores) error {
+		checkpoint, err := stores.CheckpointStore.ReadWatermarkCheckpoint(
+			ctx,
+			sessionizerProcessorName,
+		)
+		if errors.Is(err, ErrNotFound) {
+			processedThrough = WatermarkCheckpoint{
+				ProcessorName: sessionizerProcessorName,
+			}
+			return nil
 		}
-	} else if err != nil {
+		if err != nil {
+			return err
+		}
+		processedThrough = checkpoint
+		return nil
+	})
+	if err != nil {
 		sess.logger.ErrorContext(
 			ctx,
-			"fetching watermark checkpoint",
+			"loading watermark checkpoint",
 			slog.Any("error", err),
 		)
 		return WatermarkCheckpoint{}, err
@@ -139,42 +143,50 @@ func (sess *Sessionizer) Run(ctx context.Context) error {
 }
 
 func (sess *Sessionizer) processWatermark(ctx context.Context, processedThrough WatermarkCheckpoint, res ing.IngestionResult) (WatermarkCheckpoint, error) {
-	events, err := sess.eventReader.EventsBetween(
-		ctx,
-		processedThrough.ProcessedThrough,
-		*res.Watermark,
-	)
+	updatedCheckpoint := processedThrough
+	updatedCheckpoint.ProcessedThrough = *res.Watermark
+
+	err := sess.transactor.Run(ctx, func(stores TxStores) error {
+		events, err := stores.EventReader.EventsBetween(
+			ctx,
+			processedThrough.ProcessedThrough,
+			updatedCheckpoint.ProcessedThrough,
+		)
+		if err != nil {
+			sess.logger.ErrorContext(
+				ctx,
+				"fetching events between watermarks",
+				slog.Time("start", processedThrough.ProcessedThrough),
+				slog.Time("end", updatedCheckpoint.ProcessedThrough),
+				slog.Any("error", err),
+			)
+			return err
+		}
+		if err := sess.makeSessions(ctx, stores, events); err != nil {
+			sess.logger.ErrorContext(
+				ctx,
+				"make sessions",
+				slog.Any("error", err),
+			)
+			return err
+		}
+		if err := stores.CheckpointStore.UpdateWatermarkCheckpoint(ctx, updatedCheckpoint); err != nil {
+			sess.logger.ErrorContext(
+				ctx,
+				"updating watermark checkpoint",
+				slog.Any("error", err),
+			)
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		sess.logger.ErrorContext(
-			ctx,
-			"fetching events between watermarks",
-			slog.Time("start", processedThrough.ProcessedThrough),
-			slog.Time("end", *res.Watermark),
-			slog.Any("error", err),
-		)
 		return WatermarkCheckpoint{}, err
 	}
-	if err := sess.makeSessions(ctx, events); err != nil {
-		sess.logger.ErrorContext(
-			ctx,
-			"make sessions",
-			slog.Any("error", err),
-		)
-		return WatermarkCheckpoint{}, err
-	}
-	processedThrough.ProcessedThrough = *res.Watermark
-	if err := sess.checkpointStore.UpdateWatermarkCheckpoint(ctx, processedThrough); err != nil {
-		sess.logger.ErrorContext(
-			ctx,
-			"updating watermark checkpoint",
-			slog.Any("error", err),
-		)
-		return WatermarkCheckpoint{}, err
-	}
-	return processedThrough, nil
+	return updatedCheckpoint, nil
 }
 
-func (sess *Sessionizer) makeSessions(ctx context.Context, events []ing.VmEvent) error {
+func (sess *Sessionizer) makeSessions(ctx context.Context, stores TxStores, events []ing.VmEvent) error {
 	groupedEvents := sess.groupEventsByID(events)
 	for vmID, events := range groupedEvents {
 		slices.SortFunc(
@@ -194,7 +206,7 @@ func (sess *Sessionizer) makeSessions(ctx context.Context, events []ing.VmEvent)
 			"making sessions for vm",
 			slog.String("instance_id", vmID),
 		)
-		if err := sess.makeSessionForSingleVM(ctx, events); err != nil {
+		if err := sess.makeSessionForSingleVM(ctx, stores, events); err != nil {
 			return err
 		}
 	}
@@ -202,7 +214,7 @@ func (sess *Sessionizer) makeSessions(ctx context.Context, events []ing.VmEvent)
 	return nil
 }
 
-func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []ing.VmEvent) error {
+func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, stores TxStores, events []ing.VmEvent) error {
 	for _, e := range events {
 		switch e.EventType {
 		case InstanceStartEvent:
@@ -211,7 +223,7 @@ func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []in
 				InstanceID:   e.InstanceId,
 				StartedAt:    e.OccurredAt,
 			}
-			err := sess.sessionStore.CreateSessionStart(ctx, sessionStart)
+			err := stores.SessionStore.CreateSessionStart(ctx, sessionStart)
 			if err != nil {
 				sess.logger.ErrorContext(
 					ctx,
@@ -223,7 +235,7 @@ func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []in
 				return err
 			}
 		case InstanceStopEvent:
-			sessionStart, err := sess.sessionStore.ReadSessionStart(ctx, e.InstanceId, e.OccurredAt)
+			sessionStart, err := stores.SessionStore.ReadSessionStart(ctx, e.InstanceId, e.OccurredAt)
 			if errors.Is(err, ErrNotFound) {
 				sess.logger.InfoContext(
 					ctx,
@@ -238,7 +250,7 @@ func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []in
 					InstanceID:  e.InstanceId,
 					StoppedAt:   e.OccurredAt,
 				}
-				err := sess.sessionStore.CreateSessionStop(ctx, sessStop)
+				err := stores.SessionStore.CreateSessionStop(ctx, sessStop)
 				if err != nil {
 					sess.logger.ErrorContext(
 						ctx,
@@ -273,7 +285,7 @@ func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []in
 				StartEventID: sessionStart.StartEventID,
 				StopEventID:  e.EventId,
 			}
-			err = sess.sessionStore.CreateSession(ctx, session)
+			err = stores.SessionStore.CreateSession(ctx, session)
 			if err != nil {
 				sess.logger.ErrorContext(
 					ctx,
@@ -284,7 +296,7 @@ func (sess *Sessionizer) makeSessionForSingleVM(ctx context.Context, events []in
 				)
 				return err
 			}
-			err = sess.sessionStore.MarkSessionStartProcessed(ctx, sessionStart.StartEventID)
+			err = stores.SessionStore.MarkSessionStartProcessed(ctx, sessionStart.StartEventID)
 			if err != nil {
 				sess.logger.ErrorContext(
 					ctx,

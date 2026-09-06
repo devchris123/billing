@@ -113,6 +113,21 @@ type stubCheckpointStore struct {
 	updates    []WatermarkCheckpoint
 }
 
+type stubTransactor struct {
+	stores TxStores
+	err    error
+}
+
+func (transactor *stubTransactor) Run(
+	ctx context.Context,
+	work func(stores TxStores) error,
+) error {
+	if transactor.err != nil {
+		return transactor.err
+	}
+	return work(transactor.stores)
+}
+
 func (store *stubCheckpointStore) ReadWatermarkCheckpoint(
 	ctx context.Context,
 	processorName string,
@@ -135,9 +150,11 @@ func newFocusedSessionizer(
 ) *Sessionizer {
 	return NewSessionizer(
 		nil,
-		eventReader,
-		sessionStore,
-		checkpointStore,
+		&stubTransactor{stores: TxStores{
+			EventReader:     eventReader,
+			SessionStore:    sessionStore,
+			CheckpointStore: checkpointStore,
+		}},
 		slog.Default(),
 	)
 }
@@ -277,9 +294,14 @@ func TestSessionizerCreatesSessions(t *testing.T) {
 	checkpointUpdate := make(chan WatermarkCheckpoint, 3)
 	sessionizer := NewSessionizer(
 		ingestor,
-		eventReader,
-		sessionStore,
-		&FakeCheckpointStore{checkpoints: make(map[string]WatermarkCheckpoint), checkpointUpdate: checkpointUpdate},
+		&stubTransactor{stores: TxStores{
+			EventReader:  eventReader,
+			SessionStore: sessionStore,
+			CheckpointStore: &FakeCheckpointStore{
+				checkpoints:      make(map[string]WatermarkCheckpoint),
+				checkpointUpdate: checkpointUpdate,
+			},
+		}},
 		slog.Default(),
 	)
 	expectedSessionID := uuid.MustParse("01994c8e-7c00-7000-8000-000000000001")
@@ -648,7 +670,7 @@ func TestSessionizerConsumesPendingStartAfterCompletingSession(t *testing.T) {
 	sessionizer := newFocusedSessionizer(nil, sessionStore, nil)
 
 	// Execute
-	err := sessionizer.makeSessionForSingleVM(context.Background(), []ing.VmEvent{
+	err := sessionizer.makeSessionForSingleVM(context.Background(), TxStores{SessionStore: sessionStore}, []ing.VmEvent{
 		{
 			EventId:    "start-event",
 			InstanceId: "instance-1",
@@ -691,7 +713,7 @@ func TestSessionizerCreatesZeroDurationSessionWhenStopArrivesBeforeStart(t *test
 	sessionizer := newFocusedSessionizer(nil, sessionStore, nil)
 
 	// Execute
-	err := sessionizer.makeSessions(context.Background(), []ing.VmEvent{
+	err := sessionizer.makeSessions(context.Background(), TxStores{SessionStore: sessionStore}, []ing.VmEvent{
 		{
 			EventId:    "stop-event",
 			InstanceId: "instance-1",

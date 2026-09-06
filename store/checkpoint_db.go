@@ -9,15 +9,11 @@ import (
 )
 
 type CheckpointDB struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewCheckpointDB(databaseURL string) (*CheckpointDB, error) {
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		return nil, err
-	}
-	return &CheckpointDB{db: db}, nil
+func NewCheckpointDB(db DBTX) *CheckpointDB {
+	return &CheckpointDB{db: db}
 }
 
 const updateWatermarkCheckpointQuery = `

@@ -14,15 +14,11 @@ import (
 )
 
 type SessionDB struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewSessionDB(databaseURL string) (*SessionDB, error) {
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		return nil, err
-	}
-	return &SessionDB{db: db}, nil
+func NewSessionDB(db DBTX) *SessionDB {
+	return &SessionDB{db: db}
 }
 
 const insertSessionStartQuery = `

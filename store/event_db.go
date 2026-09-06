@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -11,15 +10,11 @@ import (
 )
 
 type EventDB struct {
-	db *sql.DB
+	db DBTX
 }
 
-func NewEventDB(databaseURL string) (*EventDB, error) {
-	db, err := sql.Open("pgx", databaseURL)
-	if err != nil {
-		return nil, err
-	}
-	return &EventDB{db: db}, nil
+func NewEventDB(db DBTX) *EventDB {
+	return &EventDB{db: db}
 }
 
 const insertEventQuery = `

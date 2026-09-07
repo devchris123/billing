@@ -124,7 +124,7 @@ func TestKafkaClient(t *testing.T) {
 			return nil
 		})
 		require.ErrorIs(t, err, stopErr)
-		firstConsumer.Close(context.Background())
+		firstConsumer.Close()
 
 		// Execute
 		secondConsumer := fixture.newClient(t, "commit-group", "commit-topic", noRetry)
@@ -168,7 +168,7 @@ func TestKafkaClient(t *testing.T) {
 		})
 		require.ErrorIs(t, err, stopErr)
 		require.Equal(t, 1, decodeErrors)
-		firstConsumer.Close(context.Background())
+		firstConsumer.Close()
 
 		// Execute
 		secondConsumer := fixture.newClient(t, "malformed-group", "malformed-topic", noRetry)
@@ -221,6 +221,25 @@ func TestKafkaClient(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("listener did not stop during retry backoff")
 		}
+		kafkaClient.Close()
+
+		// The interrupted event was never acknowledged and must be replayed.
+		replayConsumer := fixture.newClient(
+			t,
+			"cancel-retry-group",
+			"cancel-retry-topic",
+			noRetry,
+		)
+		replayed, replayErr, stopReplay := listenForOne(ctx, replayConsumer)
+		select {
+		case result := <-replayed:
+			require.NoError(t, result.Err)
+			require.Equal(t, "event-1", result.Value.EventId)
+		case <-ctx.Done():
+			t.Fatal("interrupted event was not replayed")
+		}
+		stopReplay()
+		require.ErrorIs(t, <-replayErr, context.Canceled)
 	})
 }
 
@@ -249,7 +268,7 @@ func (fixture kafkaFixture) newClient(t *testing.T, group string, topic string, 
 	t.Helper()
 	kafkaClient, err := client.NewKafkaClient(fixture.brokers, group, topic, &client.VmEventJsonEncoder{}, retry)
 	require.NoError(t, err)
-	t.Cleanup(func() { kafkaClient.Close(context.Background()) })
+	t.Cleanup(kafkaClient.Close)
 	return kafkaClient
 }
 

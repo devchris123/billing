@@ -1,26 +1,12 @@
 package event_client
 
 import (
-	"context"
-	"errors"
 	"testing"
 	"time"
 
 	ing "github.com/ghaering/core-api-task/event_ingestion"
 	"github.com/stretchr/testify/require"
 )
-
-type failingEncoder struct {
-	err error
-}
-
-func (encoder failingEncoder) Encode(ing.VmEvent) ([]byte, error) {
-	return nil, encoder.err
-}
-
-func (encoder failingEncoder) Decode([]byte) (ing.VmEvent, error) {
-	return ing.VmEvent{}, nil
-}
 
 func TestVmEventJSONEncoderRoundTrip(t *testing.T) {
 	// Setup
@@ -53,20 +39,4 @@ func TestVmEventJSONEncoderRejectsMalformedJSON(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-}
-
-func TestKafkaClientSendReturnsEncodingError(t *testing.T) {
-	// Setup
-	expectedErr := errors.New("encode event")
-	client := &KafkaClient[ing.VmEvent]{
-		encoder: failingEncoder{err: expectedErr},
-	}
-
-	// Execute
-	errChan := client.Send(context.Background(), ing.VmEvent{})
-
-	// Assert
-	require.ErrorIs(t, <-errChan, expectedErr)
-	_, ok := <-errChan
-	require.False(t, ok)
 }

@@ -116,11 +116,14 @@ func (sess *Sessionizer) loadCheckpoint(ctx context.Context) (WatermarkCheckpoin
 }
 
 func (sess *Sessionizer) Run(ctx context.Context) error {
-	resChan := sess.ingestor.Ingest(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	processedThrough, err := sess.loadCheckpoint(ctx)
 	if err != nil {
 		return err
 	}
+	resChan := sess.ingestor.Ingest(ctx)
 
 	for {
 		select {

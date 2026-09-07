@@ -16,13 +16,17 @@ type VmEvent struct {
 	EventType  string
 }
 
+// Result contains either a successfully decoded value or an error.
 type Result[T any] struct {
 	Value T
 	Err   error
 }
 
+// EventClient consumes events serially. Returning nil from the handler allows
+// the source record to be acknowledged; returning an error prevents the source
+// from advancing until its retry policy succeeds or terminates.
 type EventClient interface {
-	Close(ctx context.Context)
+	Close()
 	Listen(ctx context.Context, handler func(Result[VmEvent]) error) error
 }
 
@@ -60,7 +64,7 @@ func NewIngestor(
 	}
 }
 
-func (ing *Ingestor) Ingest(ctx context.Context) chan Result[IngestionResult] {
+func (ing *Ingestor) Ingest(ctx context.Context) <-chan Result[IngestionResult] {
 	resultChan := make(chan Result[IngestionResult])
 
 	go func() {

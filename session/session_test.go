@@ -161,11 +161,15 @@ func newFocusedSessionizer(
 
 type FakeEventClient struct {
 	resultChan chan ing.Result[ing.VmEvent]
+	stopped    chan struct{}
 }
 
-func (ec *FakeEventClient) Close(ctx context.Context) {}
+func (ec *FakeEventClient) Close() {}
 
 func (ec *FakeEventClient) Listen(ctx context.Context, handler func(ing.Result[ing.VmEvent]) error) error {
+	if ec.stopped != nil {
+		defer close(ec.stopped)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -744,4 +748,46 @@ func TestSessionizerCreatesZeroDurationSessionWhenStopArrivesBeforeStart(t *test
 	created := <-createdSessions
 	require.Equal(t, eventTime, created.StartedAt)
 	require.Equal(t, eventTime, created.StoppedAt)
+}
+
+func TestSessionizerStopsIngestionWhenWatermarkProcessingFails(t *testing.T) {
+	// Setup
+	expectedErr := errors.New("read events")
+	clientResults := make(chan ing.Result[ing.VmEvent], 1)
+	listenerStopped := make(chan struct{})
+	eventClient := &FakeEventClient{
+		resultChan: clientResults,
+		stopped:    listenerStopped,
+	}
+	eventStore := &FakeEventStore{appended: make(chan ing.VmEvent, 1)}
+	ingestor := ing.NewIngestor(
+		eventClient,
+		eventStore,
+		ing.IngestionConfig{},
+		slog.Default(),
+	)
+	sessionizer := NewSessionizer(
+		ingestor,
+		&stubTransactor{stores: TxStores{
+			EventReader:     &stubEventReader{err: expectedErr},
+			SessionStore:    &stubSessionStore{},
+			CheckpointStore: &stubCheckpointStore{fetchErr: ErrNotFound},
+		}},
+		slog.Default(),
+	)
+	clientResults <- ing.Result[ing.VmEvent]{Value: ing.VmEvent{
+		EventId:    "event-1",
+		OccurredAt: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+	}}
+
+	// Execute
+	err := sessionizer.Run(context.Background())
+
+	// Assert
+	require.ErrorIs(t, err, expectedErr)
+	select {
+	case <-listenerStopped:
+	case <-time.After(time.Second):
+		t.Fatal("ingestion listener did not stop")
+	}
 }

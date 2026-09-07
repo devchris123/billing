@@ -3,6 +3,7 @@ package event_client
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cenkalti/backoff/v7"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -10,11 +11,14 @@ import (
 	ing "github.com/ghaering/core-api-task/event_ingestion"
 )
 
+const defaultMaxHandlerRetryElapsedTime = 2 * time.Minute
+
 type Encoder[T any] interface {
 	Decode(value []byte) (T, error)
-	Encode(vmEvent T) ([]byte, error)
+	Encode(value T) ([]byte, error)
 }
 
+// RetryFunc retries an operation until it succeeds or returns a terminal error.
 type RetryFunc func(ctx context.Context, operation func() error) error
 
 type KafkaClient[T any] struct {
@@ -31,6 +35,12 @@ func NewKafkaClient[T any](
 	encoder Encoder[T],
 	retry RetryFunc,
 ) (*KafkaClient[T], error) {
+	if encoder == nil {
+		return nil, fmt.Errorf("encoder must not be nil")
+	}
+	if retry == nil {
+		return nil, fmt.Errorf("retry function must not be nil")
+	}
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
@@ -38,7 +48,7 @@ func NewKafkaClient[T any](
 		kgo.DisableAutoCommit(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create Kafka client: %w", err)
 	}
 	return &KafkaClient[T]{
 		client:  cl,
@@ -48,20 +58,24 @@ func NewKafkaClient[T any](
 	}, nil
 }
 
-func (kc *KafkaClient[T]) Close(ctx context.Context) {
+func (kc *KafkaClient[T]) Close() {
 	kc.client.Close()
 }
 
+// Listen consumes records serially until the context is cancelled or a
+// terminal Kafka or retry error occurs. A nil handler result acknowledges the
+// record; a non-nil result is retried according to the configured policy.
 func (kc *KafkaClient[T]) Listen(ctx context.Context, handler func(ing.Result[T]) error) error {
+	if handler == nil {
+		return fmt.Errorf("handler must not be nil")
+	}
 	for {
 		fetches := kc.client.PollFetches(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				_ = handler(ing.Result[T]{Err: e.Err})
-			}
+			return fmt.Errorf("fetch Kafka records: %w", errs[0].Err)
 		}
 		iter := fetches.RecordIter()
 		for !iter.Done() {
@@ -69,23 +83,39 @@ func (kc *KafkaClient[T]) Listen(ctx context.Context, handler func(ing.Result[T]
 			value, err := kc.encoder.Decode(record.Value)
 			if err != nil {
 				_ = handler(ing.Result[T]{Err: err})
+				// Skip poison records until dead-letter handling is available.
+				// Committing here deliberately prevents endless redelivery.
 				if err := kc.client.CommitRecords(ctx, record); err != nil {
-					return wrapError(err, "commit kafka record after decode error")
+					return fmt.Errorf("commit Kafka record after decode error: %w", err)
 				}
 				continue
 			}
 			if err := kc.retry(ctx, func() error {
 				return handler(ing.Result[T]{Value: value})
 			}); err != nil {
-				return wrapError(err, "process kafka record")
+				return fmt.Errorf(
+					"process Kafka record %s[%d] at offset %d: %w",
+					record.Topic,
+					record.Partition,
+					record.Offset,
+					err,
+				)
 			}
 			if err := kc.client.CommitRecords(ctx, record); err != nil {
-				return wrapError(err, "commit kafka record")
+				return fmt.Errorf(
+					"commit Kafka record %s[%d] at offset %d: %w",
+					record.Topic,
+					record.Partition,
+					record.Offset,
+					err,
+				)
 			}
 		}
 	}
 }
 
+// RetryWithExponentialBackoff retries transient processing failures for a
+// bounded period so a consumer does not hold fetched records indefinitely.
 func RetryWithExponentialBackoff(
 	ctx context.Context,
 	operation func() error,
@@ -96,12 +126,12 @@ func RetryWithExponentialBackoff(
 			return struct{}{}, operation()
 		},
 		backoff.WithBackOff(backoff.NewExponentialBackOff()),
-		backoff.WithMaxElapsedTime(0),
+		backoff.WithMaxElapsedTime(defaultMaxHandlerRetryElapsedTime),
 	)
 	return err
 }
 
-func (kc *KafkaClient[T]) Send(ctx context.Context, value T) chan error {
+func (kc *KafkaClient[T]) Send(ctx context.Context, value T) <-chan error {
 	errChan := make(chan error, 1)
 	encodedValue, err := kc.encoder.Encode(value)
 	if err != nil {
@@ -117,11 +147,4 @@ func (kc *KafkaClient[T]) Send(ctx context.Context, value T) chan error {
 		}
 	})
 	return errChan
-}
-
-func wrapError(err error, message string) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", message, err)
 }

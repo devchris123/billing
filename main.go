@@ -12,7 +12,8 @@ import (
 
 func main() {
 	// Streaming setup
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	eventClient, err := ec.NewKafkaClient(
 		[]string{},
 		"",
@@ -24,6 +25,7 @@ func main() {
 		slog.ErrorContext(ctx, "create kafka client", slog.Any("error", err))
 		return
 	}
+	defer eventClient.Close()
 	db, err := store.Open("")
 	if err != nil {
 		slog.ErrorContext(ctx, "open database", slog.Any("error", err))

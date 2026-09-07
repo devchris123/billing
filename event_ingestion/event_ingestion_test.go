@@ -15,7 +15,7 @@ type FakeEventClient struct {
 	listenErr  error
 }
 
-func (ec *FakeEventClient) Close(ctx context.Context) {}
+func (ec *FakeEventClient) Close() {}
 
 func (ec *FakeEventClient) Listen(ctx context.Context, handler func(Result[VmEvent]) error) error {
 	for {

@@ -8,12 +8,12 @@ import (
 )
 
 type VmEvent struct {
-	EventId    string
-	Flavour    string
-	InstanceId string
-	OccurredAt time.Time
-	ProjectId  string
-	EventType  string
+	EventId    string    `json:"event_id"`
+	Flavour    string    `json:"flavour"`
+	InstanceId string    `json:"instance_id"`
+	OccurredAt time.Time `json:"occurred_at"`
+	ProjectId  string    `json:"project_id"`
+	EventType  string    `json:"type"`
 }
 
 // Result contains either a successfully decoded value or an error.

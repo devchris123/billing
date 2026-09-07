@@ -13,16 +13,16 @@ import (
 func main() {
 	// Streaming setup
 	ctx := context.Background()
-	kc, err := ec.NewKafkaClient(
+	eventClient, err := ec.NewKafkaClient(
 		[]string{},
 		"",
 		"",
+		&ec.VmEventJsonEncoder{},
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "create kafka client", slog.Any("error", err))
 		return
 	}
-	ec := ec.NewEventClient(kc)
 	db, err := store.Open("")
 	if err != nil {
 		slog.ErrorContext(ctx, "open database", slog.Any("error", err))
@@ -36,7 +36,7 @@ func main() {
 	eventDB := store.NewEventDB(db)
 	transactor := store.NewPostgresTransactor(db)
 	sessionizer := session.NewSessionizer(ing.NewIngestor(
-		ec,
+		eventClient,
 		eventDB,
 		ing.IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),

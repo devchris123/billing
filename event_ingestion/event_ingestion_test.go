@@ -10,14 +10,13 @@ import (
 )
 
 type FakeEventClient struct {
-	vmEventChan chan VmEvent
-	errChan     chan error
+	resultChan chan Result[VmEvent]
 }
 
 func (ec *FakeEventClient) Close(ctx context.Context) {}
 
-func (ec *FakeEventClient) Listen(ctx context.Context) (<-chan VmEvent, <-chan error) {
-	return ec.vmEventChan, ec.errChan
+func (ec *FakeEventClient) Listen(ctx context.Context) chan Result[VmEvent] {
+	return ec.resultChan
 }
 
 type FakeEventDB struct {
@@ -31,9 +30,9 @@ func (ebd *FakeEventDB) Append(ctx context.Context, vmEvent VmEvent) error {
 
 func TestWatermarkAdvances(t *testing.T) {
 	// Setup
-	vmEventChan := make(chan VmEvent, 3)
+	clientResultChan := make(chan Result[VmEvent], 3)
 	appended := make(chan VmEvent, 3)
-	ing := newTestIngestor(vmEventChan, appended)
+	ing := newTestIngestor(clientResultChan, appended)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -46,9 +45,9 @@ func TestWatermarkAdvances(t *testing.T) {
 	event2 := VmEvent{EventId: "id2", OccurredAt: event2Time}
 	event3 := VmEvent{EventId: "id3", OccurredAt: event2Time.Add(-5 * time.Minute)}
 
-	vmEventChan <- event1
-	vmEventChan <- event2
-	vmEventChan <- event3
+	clientResultChan <- Result[VmEvent]{Value: event1}
+	clientResultChan <- Result[VmEvent]{Value: event2}
+	clientResultChan <- Result[VmEvent]{Value: event3}
 
 	// Assert
 	select {
@@ -87,12 +86,12 @@ func TestWatermarkAdvances(t *testing.T) {
 	}
 }
 
-func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
-	vmEventChan := make(chan VmEvent, 1)
-	errChan := make(chan error)
+func TestIngestContinuesAfterError(t *testing.T) {
+	// Setup
+	resultChan := make(chan Result[VmEvent], 2)
 	appended := make(chan VmEvent, 1)
 	ing := NewIngestor(
-		&FakeEventClient{vmEventChan: vmEventChan, errChan: errChan},
+		&FakeEventClient{resultChan: resultChan},
 		&FakeEventDB{appended: appended},
 		IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),
@@ -100,17 +99,20 @@ func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	resultChan := ing.Ingest(ctx)
-	close(errChan)
+	ingestionResultChan := ing.Ingest(ctx)
 
 	event := VmEvent{
 		EventId:    "id1",
 		OccurredAt: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
 	}
-	vmEventChan <- event
 
+	// Execute
+	resultChan <- Result[VmEvent]{Err: context.DeadlineExceeded}
+	resultChan <- Result[VmEvent]{Value: event}
+
+	// Assert
 	select {
-	case result := <-resultChan:
+	case result := <-ingestionResultChan:
 		require.Equal(t, event.EventId, result.Event.EventId)
 		require.NotNil(t, result.Watermark)
 	case <-time.After(time.Second):
@@ -124,21 +126,21 @@ func TestIngestContinuesAfterErrorChannelCloses(t *testing.T) {
 		t.Fatal("event was not appended after error channel closed")
 	}
 
-	close(vmEventChan)
+	close(resultChan)
 	select {
-	case _, ok := <-resultChan:
+	case _, ok := <-ingestionResultChan:
 		require.False(t, ok)
 	case <-time.After(time.Second):
-		t.Fatal("result channel did not close after both sources closed")
+		t.Fatal("ingestion result channel did not close")
 	}
 }
 
-func TestIngestClosesResultChannelWhenSourcesClose(t *testing.T) {
-	vmEventChan := make(chan VmEvent)
-	errChan := make(chan error)
+func TestIngestClosesResultChannelWhenSourceCloses(t *testing.T) {
+	// Setup
+	clientResultChan := make(chan Result[VmEvent])
 	appended := make(chan VmEvent)
 	ing := NewIngestor(
-		&FakeEventClient{vmEventChan: vmEventChan, errChan: errChan},
+		&FakeEventClient{resultChan: clientResultChan},
 		&FakeEventDB{appended: appended},
 		IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),
@@ -146,10 +148,11 @@ func TestIngestClosesResultChannelWhenSourcesClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Execute
 	resultChan := ing.Ingest(ctx)
-	close(vmEventChan)
-	close(errChan)
+	close(clientResultChan)
 
+	// Assert
 	select {
 	case _, ok := <-resultChan:
 		require.False(t, ok)
@@ -160,9 +163,9 @@ func TestIngestClosesResultChannelWhenSourcesClose(t *testing.T) {
 
 func TestIngestStopsOnCancellation(t *testing.T) {
 	// Setup
-	vmEventChan := make(chan VmEvent, 3)
+	clientResultChan := make(chan Result[VmEvent], 3)
 	appended := make(chan VmEvent, 3)
-	ing := newTestIngestor(vmEventChan, appended)
+	ing := newTestIngestor(clientResultChan, appended)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -180,9 +183,9 @@ func TestIngestStopsOnCancellation(t *testing.T) {
 	}
 }
 
-func newTestIngestor(vmEventChan chan VmEvent, appended chan VmEvent) *Ingestor {
+func newTestIngestor(resultChan chan Result[VmEvent], appended chan VmEvent) *Ingestor {
 	return NewIngestor(
-		&FakeEventClient{vmEventChan: vmEventChan},
+		&FakeEventClient{resultChan: resultChan},
 		&FakeEventDB{appended: appended},
 		IngestionConfig{MaxOutOfOrderness: 0},
 		slog.Default(),

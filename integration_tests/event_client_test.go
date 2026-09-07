@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghaering/core-api-task/event_client"
+	client "github.com/ghaering/core-api-task/event_client"
 	event "github.com/ghaering/core-api-task/event_ingestion"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -47,42 +47,38 @@ func TestKafkaClient(t *testing.T) {
 	_, err = admin.CreateTopic(ctx, 1, 1, nil, "testtopic")
 	require.NoError(t, err)
 
-	kc, err := event_client.NewKafkaClient(
+	ec, err := client.NewKafkaClient(
 		brokers,
 		"testgroup",
 		"testtopic",
+		&client.VmEventJsonEncoder{},
 	)
 	require.NoError(t, err)
-	ec := event_client.NewEventClient(kc)
 
 	// Setup some messages
 	event1 := event.VmEvent{EventId: "id1"}
 	event2 := event.VmEvent{EventId: "id2"}
 
-	sendErrChan, err := ec.Send(ctx, event1)
-	require.NoError(t, err)
-	require.NoError(t, <-sendErrChan)
-	sendErrChan, err = ec.Send(ctx, event2)
-	require.NoError(t, err)
-	require.NoError(t, <-sendErrChan)
+	errChan := ec.Send(ctx, event1)
+	require.NoError(t, <-errChan)
+	errChan = ec.Send(ctx, event2)
+	require.NoError(t, <-errChan)
 
 	// Listen for messages
-	eventChan, errChan := ec.Listen(ctx)
+	eventChan := ec.Listen(ctx)
 
 	select {
 	case event := <-eventChan:
-		require.Equal(t, event1.EventId, event.EventId)
-	case err := <-errChan:
-		require.NoError(t, err)
+		require.NoError(t, event.Err)
+		require.Equal(t, event1.EventId, event.Value.EventId)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for first event")
 	}
 
 	select {
 	case event := <-eventChan:
-		require.Equal(t, event2.EventId, event.EventId)
-	case err := <-errChan:
-		require.NoError(t, err)
+		require.NoError(t, event.Err)
+		require.Equal(t, event2.EventId, event.Value.EventId)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for second event")
 	}

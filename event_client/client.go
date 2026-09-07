@@ -6,18 +6,26 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	conc "github.com/ghaering/core-api-task/concurrency"
+	ing "github.com/ghaering/core-api-task/event_ingestion"
 )
 
-type KafkaClient struct {
-	client *kgo.Client
-	topic  string
+type Encoder[T any] interface {
+	Decode(value []byte) (T, error)
+	Encode(vmEvent T) ([]byte, error)
 }
 
-func NewKafkaClient(
+type KafkaClient[T any] struct {
+	client  *kgo.Client
+	topic   string
+	encoder Encoder[T]
+}
+
+func NewKafkaClient[T any](
 	brokers []string,
 	group string,
 	topic string,
-) (*KafkaClient, error) {
+	encoder Encoder[T],
+) (*KafkaClient[T], error) {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
@@ -26,25 +34,24 @@ func NewKafkaClient(
 	if err != nil {
 		return nil, err
 	}
-	return &KafkaClient{client: cl, topic: topic}, nil
+	return &KafkaClient[T]{client: cl, topic: topic, encoder: encoder}, nil
 }
 
-func (kc *KafkaClient) close() {
+func (kc *KafkaClient[T]) Close(ctx context.Context) {
 	kc.client.Close()
 }
 
-func (kc *KafkaClient) listen(ctx context.Context) (<-chan []byte, <-chan error) {
-	listenerChan := make(chan []byte)
-	errChan := make(chan error)
+func (kc *KafkaClient[T]) Listen(ctx context.Context) chan ing.Result[T] {
+	listenerChan := make(chan ing.Result[T])
+
 	go func() {
 		defer close(listenerChan)
-		defer close(errChan)
 
 		for {
 			fetches := kc.client.PollFetches(ctx)
 			if errs := fetches.Errors(); len(errs) > 0 {
 				for _, err := range errs {
-					if !conc.Send(ctx, errChan, err.Err) {
+					if !conc.Send(ctx, listenerChan, ing.Result[T]{Err: err.Err}) {
 						return
 					}
 				}
@@ -52,18 +59,31 @@ func (kc *KafkaClient) listen(ctx context.Context) (<-chan []byte, <-chan error)
 			iter := fetches.RecordIter()
 			for !iter.Done() {
 				record := iter.Next()
-				if !conc.Send(ctx, listenerChan, record.Value) {
+				value, err := kc.encoder.Decode(record.Value)
+				if err != nil {
+					if !conc.Send(ctx, listenerChan, ing.Result[T]{Err: err}) {
+						return
+					}
+					continue
+				}
+				if !conc.Send(ctx, listenerChan, ing.Result[T]{Value: value}) {
 					return
 				}
 			}
 		}
 	}()
-	return listenerChan, errChan
+	return listenerChan
 }
 
-func (kc *KafkaClient) send(ctx context.Context, value []byte) chan error {
-	errChan := make(chan error)
-	record := &kgo.Record{Topic: kc.topic, Value: value}
+func (kc *KafkaClient[T]) Send(ctx context.Context, value T) chan error {
+	errChan := make(chan error, 1)
+	encodedValue, err := kc.encoder.Encode(value)
+	if err != nil {
+		errChan <- err
+		close(errChan)
+		return errChan
+	}
+	record := &kgo.Record{Topic: kc.topic, Value: encodedValue}
 	kc.client.Produce(ctx, record, func(r *kgo.Record, err error) {
 		defer close(errChan)
 		if err != nil {

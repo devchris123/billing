@@ -15,9 +15,14 @@ type VmEvent struct {
 	EventType  string
 }
 
+type Result[T any] struct {
+	Value T
+	Err   error
+}
+
 type EventClient interface {
 	Close(ctx context.Context)
-	Listen(ctx context.Context) (<-chan VmEvent, <-chan error)
+	Listen(ctx context.Context) chan Result[VmEvent]
 }
 
 type EventAppender interface {
@@ -57,13 +62,13 @@ func NewIngestor(
 func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 	resultChan := make(chan IngestionResult)
 
-	vmEventChan, errChan := ing.eventClient.Listen(ctx)
+	vmEventChan := ing.eventClient.Listen(ctx)
 
 	go func() {
 		defer close(resultChan)
 
 		var lastSeenEventTimestamp time.Time
-		for vmEventChan != nil || errChan != nil {
+		for vmEventChan != nil {
 			select {
 			case <-ctx.Done():
 				ing.logger.DebugContext(
@@ -80,11 +85,15 @@ func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 					vmEventChan = nil
 					continue
 				}
-				ing.logger.DebugContext(
-					ctx, "Ingest event",
-					slog.Any("event", vmEvent),
-				)
-				if err := ing.eventAppender.Append(ctx, vmEvent); err != nil {
+				if vmEvent.Err != nil {
+					ing.logger.ErrorContext(
+						ctx, "Ingest event error",
+						slog.Any("error", vmEvent.Err),
+					)
+					continue
+				}
+
+				if err := ing.eventAppender.Append(ctx, vmEvent.Value); err != nil {
 					ing.logger.ErrorContext(
 						ctx, "Ingest append error",
 						slog.Any("error", err),
@@ -93,15 +102,15 @@ func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 				}
 
 				var watermark *time.Time
-				if vmEvent.OccurredAt.After(lastSeenEventTimestamp) {
-					lastSeenEventTimestamp = vmEvent.OccurredAt
+				if vmEvent.Value.OccurredAt.After(lastSeenEventTimestamp) {
+					lastSeenEventTimestamp = vmEvent.Value.OccurredAt
 					nextWatermark := lastSeenEventTimestamp.Add(
 						-ing.ingestionConfig.MaxOutOfOrderness,
 					)
 					watermark = &nextWatermark
 				}
 				result := IngestionResult{
-					Event:     vmEvent,
+					Event:     vmEvent.Value,
 					Watermark: watermark,
 				}
 				select {
@@ -109,19 +118,6 @@ func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
 				case <-ctx.Done():
 					return
 				}
-			case err, ok := <-errChan:
-				if !ok {
-					ing.logger.InfoContext(
-						ctx,
-						"Ingest error channel closed",
-					)
-					errChan = nil
-					continue
-				}
-				ing.logger.ErrorContext(
-					ctx, "Ingest error %",
-					slog.Any("error", err),
-				)
 			}
 		}
 	}()

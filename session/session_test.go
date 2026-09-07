@@ -160,14 +160,13 @@ func newFocusedSessionizer(
 }
 
 type FakeEventClient struct {
-	vmEventChan chan ing.VmEvent
-	errChan     chan error
+	resultChan chan ing.Result[ing.VmEvent]
 }
 
 func (ec *FakeEventClient) Close(ctx context.Context) {}
 
-func (ec *FakeEventClient) Listen(ctx context.Context) (<-chan ing.VmEvent, <-chan error) {
-	return ec.vmEventChan, ec.errChan
+func (ec *FakeEventClient) Listen(ctx context.Context) chan ing.Result[ing.VmEvent] {
+	return ec.resultChan
 }
 
 type FakeEventStore struct {
@@ -261,7 +260,7 @@ func (cdb *FakeCheckpointStore) ReadWatermarkCheckpoint(ctx context.Context, pro
 
 func TestSessionizerCreatesSessions(t *testing.T) {
 	// Setup
-	vmEventChan := make(chan ing.VmEvent, 3)
+	vmEventChan := make(chan ing.Result[ing.VmEvent], 3)
 	appended := make(chan ing.VmEvent, 3)
 	date1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 	date2 := date1.Add(time.Hour)
@@ -277,7 +276,7 @@ func TestSessionizerCreatesSessions(t *testing.T) {
 	}
 	ingestionConfig := ing.IngestionConfig{MaxOutOfOrderness: 10 * time.Minute}
 	ingestor := ing.NewIngestor(
-		&FakeEventClient{vmEventChan: vmEventChan},
+		&FakeEventClient{resultChan: vmEventChan},
 		eventReader,
 		ingestionConfig,
 		slog.Default(),
@@ -311,7 +310,7 @@ func TestSessionizerCreatesSessions(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for _, e := range testEvents {
-		vmEventChan <- e
+		vmEventChan <- ing.Result[ing.VmEvent]{Value: e}
 	}
 
 	// Execute

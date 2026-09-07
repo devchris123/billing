@@ -2,6 +2,7 @@ package eventingestion
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -22,7 +23,7 @@ type Result[T any] struct {
 
 type EventClient interface {
 	Close(ctx context.Context)
-	Listen(ctx context.Context) chan Result[VmEvent]
+	Listen(ctx context.Context, handler func(Result[VmEvent]) error) error
 }
 
 type EventAppender interface {
@@ -59,65 +60,52 @@ func NewIngestor(
 	}
 }
 
-func (ing *Ingestor) Ingest(ctx context.Context) chan IngestionResult {
-	resultChan := make(chan IngestionResult)
-
-	vmEventChan := ing.eventClient.Listen(ctx)
+func (ing *Ingestor) Ingest(ctx context.Context) chan Result[IngestionResult] {
+	resultChan := make(chan Result[IngestionResult])
 
 	go func() {
 		defer close(resultChan)
 
 		var lastSeenEventTimestamp time.Time
-		for vmEventChan != nil {
-			select {
-			case <-ctx.Done():
-				ing.logger.DebugContext(
-					ctx,
-					"Ingest context timeout",
+		err := ing.eventClient.Listen(ctx, func(vmEvent Result[VmEvent]) error {
+			if vmEvent.Err != nil {
+				ing.logger.ErrorContext(
+					ctx, "Ingest event error",
+					slog.Any("error", vmEvent.Err),
 				)
-				return
-			case vmEvent, ok := <-vmEventChan:
-				if !ok {
-					ing.logger.InfoContext(
-						ctx,
-						"Ingest event channel closed",
-					)
-					vmEventChan = nil
-					continue
-				}
-				if vmEvent.Err != nil {
-					ing.logger.ErrorContext(
-						ctx, "Ingest event error",
-						slog.Any("error", vmEvent.Err),
-					)
-					continue
-				}
+				return nil
+			}
 
-				if err := ing.eventAppender.Append(ctx, vmEvent.Value); err != nil {
-					ing.logger.ErrorContext(
-						ctx, "Ingest append error",
-						slog.Any("error", err),
-					)
-					continue
-				}
+			if err := ing.eventAppender.Append(ctx, vmEvent.Value); err != nil {
+				ing.logger.ErrorContext(
+					ctx, "Ingest append error",
+					slog.Any("error", err),
+				)
+				return err
+			}
 
-				var watermark *time.Time
-				if vmEvent.Value.OccurredAt.After(lastSeenEventTimestamp) {
-					lastSeenEventTimestamp = vmEvent.Value.OccurredAt
-					nextWatermark := lastSeenEventTimestamp.Add(
-						-ing.ingestionConfig.MaxOutOfOrderness,
-					)
-					watermark = &nextWatermark
-				}
-				result := IngestionResult{
-					Event:     vmEvent.Value,
-					Watermark: watermark,
-				}
-				select {
-				case resultChan <- result:
-				case <-ctx.Done():
-					return
-				}
+			var watermark *time.Time
+			if vmEvent.Value.OccurredAt.After(lastSeenEventTimestamp) {
+				lastSeenEventTimestamp = vmEvent.Value.OccurredAt
+				nextWatermark := lastSeenEventTimestamp.Add(
+					-ing.ingestionConfig.MaxOutOfOrderness,
+				)
+				watermark = &nextWatermark
+			}
+			result := Result[IngestionResult]{
+				Value: IngestionResult{Event: vmEvent.Value, Watermark: watermark},
+			}
+			select {
+			case resultChan <- result:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			select {
+			case resultChan <- Result[IngestionResult]{Err: err}:
+			case <-ctx.Done():
 			}
 		}
 	}()

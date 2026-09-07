@@ -2,10 +2,11 @@ package event_client
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/cenkalti/backoff/v7"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	conc "github.com/ghaering/core-api-task/concurrency"
 	ing "github.com/ghaering/core-api-task/event_ingestion"
 )
 
@@ -14,10 +15,13 @@ type Encoder[T any] interface {
 	Encode(vmEvent T) ([]byte, error)
 }
 
+type RetryFunc func(ctx context.Context, operation func() error) error
+
 type KafkaClient[T any] struct {
 	client  *kgo.Client
 	topic   string
 	encoder Encoder[T]
+	retry   RetryFunc
 }
 
 func NewKafkaClient[T any](
@@ -25,54 +29,76 @@ func NewKafkaClient[T any](
 	group string,
 	topic string,
 	encoder Encoder[T],
+	retry RetryFunc,
 ) (*KafkaClient[T], error) {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
+		kgo.DisableAutoCommit(),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &KafkaClient[T]{client: cl, topic: topic, encoder: encoder}, nil
+	return &KafkaClient[T]{
+		client:  cl,
+		topic:   topic,
+		encoder: encoder,
+		retry:   retry,
+	}, nil
 }
 
 func (kc *KafkaClient[T]) Close(ctx context.Context) {
 	kc.client.Close()
 }
 
-func (kc *KafkaClient[T]) Listen(ctx context.Context) chan ing.Result[T] {
-	listenerChan := make(chan ing.Result[T])
-
-	go func() {
-		defer close(listenerChan)
-
-		for {
-			fetches := kc.client.PollFetches(ctx)
-			if errs := fetches.Errors(); len(errs) > 0 {
-				for _, err := range errs {
-					if !conc.Send(ctx, listenerChan, ing.Result[T]{Err: err.Err}) {
-						return
-					}
-				}
-			}
-			iter := fetches.RecordIter()
-			for !iter.Done() {
-				record := iter.Next()
-				value, err := kc.encoder.Decode(record.Value)
-				if err != nil {
-					if !conc.Send(ctx, listenerChan, ing.Result[T]{Err: err}) {
-						return
-					}
-					continue
-				}
-				if !conc.Send(ctx, listenerChan, ing.Result[T]{Value: value}) {
-					return
-				}
+func (kc *KafkaClient[T]) Listen(ctx context.Context, handler func(ing.Result[T]) error) error {
+	for {
+		fetches := kc.client.PollFetches(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errs := fetches.Errors(); len(errs) > 0 {
+			for _, e := range errs {
+				_ = handler(ing.Result[T]{Err: e.Err})
 			}
 		}
-	}()
-	return listenerChan
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			record := iter.Next()
+			value, err := kc.encoder.Decode(record.Value)
+			if err != nil {
+				_ = handler(ing.Result[T]{Err: err})
+				if err := kc.client.CommitRecords(ctx, record); err != nil {
+					return wrapError(err, "commit kafka record after decode error")
+				}
+				continue
+			}
+			if err := kc.retry(ctx, func() error {
+				return handler(ing.Result[T]{Value: value})
+			}); err != nil {
+				return wrapError(err, "process kafka record")
+			}
+			if err := kc.client.CommitRecords(ctx, record); err != nil {
+				return wrapError(err, "commit kafka record")
+			}
+		}
+	}
+}
+
+func RetryWithExponentialBackoff(
+	ctx context.Context,
+	operation func() error,
+) error {
+	_, err := backoff.Retry(
+		ctx,
+		func() (struct{}, error) {
+			return struct{}{}, operation()
+		},
+		backoff.WithBackOff(backoff.NewExponentialBackOff()),
+		backoff.WithMaxElapsedTime(0),
+	)
+	return err
 }
 
 func (kc *KafkaClient[T]) Send(ctx context.Context, value T) chan error {
@@ -91,4 +117,11 @@ func (kc *KafkaClient[T]) Send(ctx context.Context, value T) chan error {
 		}
 	})
 	return errChan
+}
+
+func wrapError(err error, message string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", message, err)
 }

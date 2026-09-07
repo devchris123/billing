@@ -2,6 +2,7 @@ package eventingestion
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -11,12 +12,23 @@ import (
 
 type FakeEventClient struct {
 	resultChan chan Result[VmEvent]
+	listenErr  error
 }
 
 func (ec *FakeEventClient) Close(ctx context.Context) {}
 
-func (ec *FakeEventClient) Listen(ctx context.Context) chan Result[VmEvent] {
-	return ec.resultChan
+func (ec *FakeEventClient) Listen(ctx context.Context, handler func(Result[VmEvent]) error) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result, ok := <-ec.resultChan:
+			if !ok {
+				return ec.listenErr
+			}
+			_ = handler(result)
+		}
+	}
 }
 
 type FakeEventDB struct {
@@ -52,26 +64,29 @@ func TestWatermarkAdvances(t *testing.T) {
 	// Assert
 	select {
 	case result := <-resultChan:
-		require.NotNil(t, result.Watermark)
-		require.Equal(t, event1.OccurredAt, *result.Watermark)
-		require.Equal(t, event1.EventId, result.Event.EventId)
+		require.NoError(t, result.Err)
+		require.NotNil(t, result.Value.Watermark)
+		require.Equal(t, event1.OccurredAt, *result.Value.Watermark)
+		require.Equal(t, event1.EventId, result.Value.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
 
 	select {
 	case result := <-resultChan:
-		require.NotNil(t, result.Watermark)
-		require.Equal(t, event2.OccurredAt, *result.Watermark)
-		require.Equal(t, event2.EventId, result.Event.EventId)
+		require.NoError(t, result.Err)
+		require.NotNil(t, result.Value.Watermark)
+		require.Equal(t, event2.OccurredAt, *result.Value.Watermark)
+		require.Equal(t, event2.EventId, result.Value.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
 
 	select {
 	case result := <-resultChan:
-		require.Nil(t, result.Watermark)
-		require.Equal(t, event3.EventId, result.Event.EventId)
+		require.NoError(t, result.Err)
+		require.Nil(t, result.Value.Watermark)
+		require.Equal(t, event3.EventId, result.Value.Event.EventId)
 	case <-time.After(1 * time.Second):
 		t.Fatal("watermark timeout")
 	}
@@ -113,8 +128,9 @@ func TestIngestContinuesAfterError(t *testing.T) {
 	// Assert
 	select {
 	case result := <-ingestionResultChan:
-		require.Equal(t, event.EventId, result.Event.EventId)
-		require.NotNil(t, result.Watermark)
+		require.NoError(t, result.Err)
+		require.Equal(t, event.EventId, result.Value.Event.EventId)
+		require.NotNil(t, result.Value.Watermark)
 	case <-time.After(time.Second):
 		t.Fatal("event was not processed after error channel closed")
 	}
@@ -159,6 +175,29 @@ func TestIngestClosesResultChannelWhenSourceCloses(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("result channel did not close after its sources closed")
 	}
+}
+
+func TestIngestPropagatesTerminalClientError(t *testing.T) {
+	// Setup
+	expectedErr := errors.New("listen failed")
+	clientResultChan := make(chan Result[VmEvent])
+	close(clientResultChan)
+	ing := NewIngestor(
+		&FakeEventClient{resultChan: clientResultChan, listenErr: expectedErr},
+		&FakeEventDB{appended: make(chan VmEvent)},
+		IngestionConfig{},
+		slog.Default(),
+	)
+
+	// Execute
+	resultChan := ing.Ingest(context.Background())
+
+	// Assert
+	result, ok := <-resultChan
+	require.True(t, ok)
+	require.ErrorIs(t, result.Err, expectedErr)
+	_, ok = <-resultChan
+	require.False(t, ok)
 }
 
 func TestIngestStopsOnCancellation(t *testing.T) {

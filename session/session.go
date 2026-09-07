@@ -130,11 +130,15 @@ func (sess *Sessionizer) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if res.Watermark == nil {
+			if res.Err != nil {
+				return res.Err
+			}
+			ingestionResult := res.Value
+			if ingestionResult.Watermark == nil {
 				continue
 			}
 			var err error
-			processedThrough, err = sess.processWatermark(ctx, processedThrough, res)
+			processedThrough, err = sess.processWatermark(ctx, processedThrough, ingestionResult)
 			if err != nil {
 				return err
 			}

@@ -18,6 +18,7 @@ func main() {
 		"",
 		"",
 		&ec.VmEventJsonEncoder{},
+		ec.RetryWithExponentialBackoff,
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "create kafka client", slog.Any("error", err))

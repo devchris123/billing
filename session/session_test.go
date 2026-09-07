@@ -165,8 +165,18 @@ type FakeEventClient struct {
 
 func (ec *FakeEventClient) Close(ctx context.Context) {}
 
-func (ec *FakeEventClient) Listen(ctx context.Context) chan ing.Result[ing.VmEvent] {
-	return ec.resultChan
+func (ec *FakeEventClient) Listen(ctx context.Context, handler func(ing.Result[ing.VmEvent]) error) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result, ok := <-ec.resultChan:
+			if !ok {
+				return nil
+			}
+			_ = handler(result)
+		}
+	}
 }
 
 type FakeEventStore struct {

@@ -150,6 +150,10 @@ func (sess *Sessionizer) Run(ctx context.Context) error {
 }
 
 func (sess *Sessionizer) processWatermark(ctx context.Context, processedThrough WatermarkCheckpoint, res ing.IngestionResult) (WatermarkCheckpoint, error) {
+	if !res.Watermark.After(processedThrough.ProcessedThrough) {
+		return processedThrough, nil
+	}
+
 	updatedCheckpoint := processedThrough
 	updatedCheckpoint.ProcessedThrough = *res.Watermark
 

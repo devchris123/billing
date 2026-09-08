@@ -498,6 +498,43 @@ func TestProcessWatermarkAdvancesCheckpointAfterSuccess(t *testing.T) {
 	require.Equal(t, []WatermarkCheckpoint{updated}, checkpointStore.updates)
 }
 
+func TestProcessWatermarkIgnoresNonAdvancingWatermark(t *testing.T) {
+	for name, watermarkOffset := range map[string]time.Duration{
+		"equal":    0,
+		"backward": -time.Minute,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Setup
+			processedThrough := WatermarkCheckpoint{
+				ProcessorName:    sessionizerProcessorName,
+				ProcessedThrough: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+			}
+			watermark := processedThrough.ProcessedThrough.Add(watermarkOffset)
+			eventReader := &stubEventReader{}
+			checkpointStore := &stubCheckpointStore{}
+			sessionizer := newFocusedSessionizer(
+				eventReader,
+				&stubSessionStore{},
+				checkpointStore,
+			)
+
+			// Execute
+			actual, err := sessionizer.processWatermark(
+				context.Background(),
+				processedThrough,
+				ing.IngestionResult{Watermark: &watermark},
+			)
+
+			// Assert
+			require.NoError(t, err)
+			require.Equal(t, processedThrough, actual)
+			require.Empty(t, eventReader.starts)
+			require.Empty(t, eventReader.ends)
+			require.Empty(t, checkpointStore.updates)
+		})
+	}
+}
+
 func TestProcessWatermarkDoesNotAdvanceWhenEventReadFails(t *testing.T) {
 	// Setup
 	expectedErr := errors.New("event read failed")

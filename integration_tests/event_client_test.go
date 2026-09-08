@@ -31,7 +31,7 @@ func TestKafkaClient(t *testing.T) {
 		defer cancel()
 		fixture.createTopic(t, ctx, "events-topic")
 		kafkaClient := fixture.newClient(t, "events-group", "events-topic", noRetry)
-		expected := []event.VmEvent{{EventId: "event-1"}, {EventId: "event-2"}}
+		expected := []event.VmEvent{validVMEvent("event-1"), validVMEvent("event-2")}
 		for _, vmEvent := range expected {
 			require.NoError(t, <-kafkaClient.Send(ctx, vmEvent))
 		}
@@ -66,7 +66,11 @@ func TestKafkaClient(t *testing.T) {
 		defer cancel()
 		fixture.createTopic(t, ctx, "retry-topic")
 		kafkaClient := fixture.newClient(t, "retry-group", "retry-topic", immediateRetry)
-		expected := []event.VmEvent{{EventId: "event-1"}, {EventId: "event-2"}, {EventId: "event-3"}}
+		expected := []event.VmEvent{
+			validVMEvent("event-1"),
+			validVMEvent("event-2"),
+			validVMEvent("event-3"),
+		}
 		for _, vmEvent := range expected {
 			require.NoError(t, <-kafkaClient.Send(ctx, vmEvent))
 		}
@@ -108,8 +112,8 @@ func TestKafkaClient(t *testing.T) {
 		defer cancel()
 		fixture.createTopic(t, ctx, "commit-topic")
 		firstConsumer := fixture.newClient(t, "commit-group", "commit-topic", noRetry)
-		first := event.VmEvent{EventId: "committed-event"}
-		second := event.VmEvent{EventId: "uncommitted-event"}
+		first := validVMEvent("committed-event")
+		second := validVMEvent("uncommitted-event")
 		require.NoError(t, <-firstConsumer.Send(ctx, first))
 		require.NoError(t, <-firstConsumer.Send(ctx, second))
 
@@ -150,7 +154,7 @@ func TestKafkaClient(t *testing.T) {
 		fixture.createTopic(t, ctx, "malformed-topic")
 		produceRawRecords(t, ctx, fixture.brokers, "malformed-topic", []byte("malformed"))
 		encoder := &client.VmEventJsonEncoder{}
-		expected := event.VmEvent{EventId: "valid-event"}
+		expected := validVMEvent("valid-event")
 		encoded, err := encoder.Encode(expected)
 		require.NoError(t, err)
 		produceRawRecords(t, ctx, fixture.brokers, "malformed-topic", encoded)
@@ -193,7 +197,7 @@ func TestKafkaClient(t *testing.T) {
 		defer cancel()
 		fixture.createTopic(t, ctx, "cancel-retry-topic")
 		kafkaClient := fixture.newClient(t, "cancel-retry-group", "cancel-retry-topic", client.RetryWithExponentialBackoff)
-		require.NoError(t, <-kafkaClient.Send(ctx, event.VmEvent{EventId: "event-1"}))
+		require.NoError(t, <-kafkaClient.Send(ctx, validVMEvent("event-1")))
 
 		attempted := make(chan struct{}, 1)
 		listenCtx, stopListening := context.WithCancel(ctx)
@@ -295,6 +299,17 @@ func immediateRetry(ctx context.Context, operation func() error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+	}
+}
+
+func validVMEvent(eventID string) event.VmEvent {
+	return event.VmEvent{
+		EventId:    eventID,
+		Flavour:    "s1.small",
+		InstanceId: "instance-1",
+		OccurredAt: time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC),
+		ProjectId:  "project-1",
+		EventType:  "instance.start",
 	}
 }
 

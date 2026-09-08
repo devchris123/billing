@@ -9,7 +9,7 @@ import (
 
 type VmEvent struct {
 	EventId    string    `json:"event_id"`
-	Flavour    string    `json:"flavour"`
+	Flavour    string    `json:"flavor"`
 	InstanceId string    `json:"instance_id"`
 	OccurredAt time.Time `json:"occurred_at"`
 	ProjectId  string    `json:"project_id"`

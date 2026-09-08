@@ -36,7 +36,7 @@ func TestVmEventJSONEncoderDecodesCorrectly(t *testing.T) {
 	// Sample JSON representation of a VmEvent
 	jsonData := []byte(`{
 		"event_id": "event-2",
-		"flavour": "medium",
+		"flavor": "medium",
 		"instance_id": "instance-2",
 		"occurred_at": "2025-02-01T12:00:00Z",
 		"project_id": "project-2",
@@ -69,4 +69,21 @@ func TestVmEventJSONEncoderRejectsMalformedJSON(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
+}
+
+func TestVmEventJSONEncoderRejectsMissingRequiredFields(t *testing.T) {
+	// Setup
+	encoder := &VmEventJsonEncoder{}
+
+	// Execute
+	_, err := encoder.Decode([]byte(`{}`))
+
+	// Assert
+	require.ErrorContains(t, err, "missing required event fields")
+	require.ErrorContains(t, err, "event_id")
+	require.ErrorContains(t, err, "flavor")
+	require.ErrorContains(t, err, "instance_id")
+	require.ErrorContains(t, err, "occurred_at")
+	require.ErrorContains(t, err, "project_id")
+	require.ErrorContains(t, err, "type")
 }

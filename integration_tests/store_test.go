@@ -25,7 +25,7 @@ func TestPostgresStores(t *testing.T) {
 	postgresC, err := postgres.Run(
 		ctx,
 		"postgres:16-alpine",
-		postgres.WithInitScripts(filepath.Join("../migrations", "001_init.up.sql")),
+		postgres.WithInitScripts(filepath.Join("../migrations", "000001_init.up.sql")),
 		postgres.WithDatabase("events"),
 		postgres.WithUsername("user"),
 		postgres.WithPassword("password"),

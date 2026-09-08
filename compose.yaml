@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,6 +20,7 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
+    logging: *default-logging
 
   kafka:
     image: confluentinc/confluent-local:7.5.0
@@ -29,7 +36,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_MS: 1800000
       KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 60000
       KAFKA_LOG_SEGMENT_MS: 300000
@@ -40,6 +47,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *default-logging
 
   migrate:
     image: migrate/migrate:v4.19.1
@@ -53,6 +61,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *default-logging
 
   kafka-init:
     image: confluentinc/confluent-local:7.5.0
@@ -69,6 +78,7 @@ services:
       kafka:
         condition: service_healthy
     restart: "no"
+    logging: *default-logging
 
   app:
     build:
@@ -85,6 +95,7 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    logging: *default-logging
 
   producer:
     build:
@@ -103,6 +114,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
     restart: on-failure
+    logging: *default-logging
 
 volumes:
   postgres-data:

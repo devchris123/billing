@@ -1,0 +1,11 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+
+coverage.out
+bin/
+
+*_test.go
+integration_tests/

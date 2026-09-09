@@ -17,6 +17,8 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	if err := run(os.Args[1:]); err != nil {
 		log := slog.With(slog.String("component", "main"))
 		log.Error("run", slog.Any("error", err))

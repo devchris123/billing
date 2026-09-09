@@ -1,3 +1,5 @@
+name: schwarz_trial
+
 x-logging: &default-logging
   driver: json-file
   options:
@@ -53,30 +55,45 @@ services:
     image: migrate/migrate:v4.19.1
     volumes:
       - ./migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - -path=/migrations
-      - -database=postgres://billing:billing@postgres:5432/billing?sslmode=disable
-      - up
+      - |
+        migrate \
+          -path=/migrations \
+          -database=postgres://billing:billing@postgres:5432/billing?sslmode=disable \
+          up
+        command_status=$$?
+        sleep 6
+        exit $$command_status
     depends_on:
       postgres:
         condition: service_healthy
+      alloy:
+        condition: service_started
     restart: "no"
     logging: *default-logging
 
   kafka-init:
     image: confluentinc/confluent-local:7.5.0
-    entrypoint: ["kafka-topics"]
+    entrypoint: ["/bin/bash", "-c"]
     command:
-      - --bootstrap-server=kafka:29092
-      - --create
-      - --if-not-exists
-      - --topic=billing.vm.events
-      - --partitions=1
-      - --replication-factor=1
-      - --config=retention.ms=1800000
+      - |
+        kafka-topics \
+          --bootstrap-server=kafka:29092 \
+          --create \
+          --if-not-exists \
+          --topic=billing.vm.events \
+          --partitions=1 \
+          --replication-factor=1 \
+          --config=retention.ms=1800000
+        command_status=$$?
+        sleep 6
+        exit $$command_status
     depends_on:
       kafka:
         condition: service_healthy
+      alloy:
+        condition: service_started
     restart: "no"
     logging: *default-logging
 
@@ -116,5 +133,87 @@ services:
     restart: on-failure
     logging: *default-logging
 
+  grafana-db-init:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: billing
+    volumes:
+      - ./dev/observability/create-grafana-reader.sql:/scripts/create-grafana-reader.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        psql \
+          -h postgres \
+          -U billing \
+          -d billing \
+          -v ON_ERROR_STOP=1 \
+          -f /scripts/create-grafana-reader.sql
+        command_status=$$?
+        sleep 6
+        exit $$command_status
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    logging: *default-logging
+
+  loki:
+    image: grafana/loki:3.7.2
+    command: [-config.file=/etc/loki/config.yaml]
+    volumes:
+      - ./dev/observability/loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+    logging: *default-logging
+
+  alloy:
+    image: grafana/alloy:v1.19.2
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./dev/observability/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    ports:
+      - "12345:12345"
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./dev/observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./dev/observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./dev/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      loki:
+        condition: service_started
+      grafana-db-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    logging: *default-logging
+
 volumes:
   postgres-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

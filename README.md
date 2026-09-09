@@ -11,7 +11,8 @@ Kafka -> decode -> vm_events -> watermark -> sessions
 ## Run the local development stack
 
 The Compose stack contains PostgreSQL, Kafka, one-shot database and topic
-initializers, the application, and a development event producer.
+initializers, the application, a development event producer, and a local
+Grafana/Loki/Alloy observability stack.
 
 ```sh
 docker compose up --build
@@ -22,6 +23,7 @@ Startup is ordered as follows:
 ```text
 PostgreSQL healthy -> migrate exits successfully -> application
 Kafka healthy     -> kafka-init exits successfully -> application + producer
+Loki              -> Alloy log collection          -> Grafana
 ```
 
 The producer emits valid VM start/stop lifecycles every five seconds. Synthetic
@@ -47,6 +49,26 @@ docker compose down -v
 ```
 
 ## Inspect the pipeline
+
+Open Grafana at [http://localhost:3000](http://localhost:3000) and sign in with
+**admin / admin**. The provisioned **VM sessionizer** folder contains:
+
+- **Container logs**: stdout/stderr from every Compose service, filterable by
+  Compose project and service name.
+- **VM sessionizer**: raw-event and session counts, pending starts, checkpoint
+  lag, session throughput, and recent session details.
+
+The domain dashboard uses a dedicated read-only PostgreSQL role. Loki retains
+local logs for 24 hours. Alloy's diagnostics UI is available at
+[http://localhost:12345](http://localhost:12345), and Loki's readiness endpoint
+is available at [http://localhost:3100/ready](http://localhost:3100/ready).
+
+Alloy mounts the Docker socket read-only so that it can discover containers and
+read their logs. Access to the Docker socket is still highly privileged, so this
+configuration is intended only for local development. Discovery is restricted
+to the Compose project named **schwarz_trial**, so logs from unrelated local
+containers are not collected. The short-lived initialization jobs wait six
+seconds before exiting so Alloy's five-second discovery cycle can collect them.
 
 Open an interactive PostgreSQL session:
 
